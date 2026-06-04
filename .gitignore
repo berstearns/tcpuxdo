@@ -1,0 +1,21 @@
+# your private deployment — never publish
+.env
+deploy/.env
+setup/.env
+
+# per-run runbooks with the real relay IP / node names (root-level only;
+# docs/runbook/ is masked + tracked)
+/runbook/
+
+# never let a secret escape into git, whatever it's named
+*.token
+*.key
+allowlist.json
+shortcuts.json
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.DS_Store

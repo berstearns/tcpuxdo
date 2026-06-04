@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#===============================================================================
+# tcpuxdo — entrypoint wrapper for the tcpux dispatch engine.
+#
+# Sources the repo-root .env (git-ignored) and dispatches to the right engine
+# script. The repo is public; .env holds your relay host/ports/token and is not.
+#
+# Usage:
+#   tcpuxdo -w nodeA -p work:1:1 -c 'git pull'   # send-keys (default verb)
+#   tcpuxdo -s claude-main -c '/compact'         # send-keys via shortcut
+#   tcpuxdo list [nodeA]                          # pretty-print nodes + panes
+#   tcpuxdo shortcut set NAME -w nodeA -p work:1:1 [--force]
+#   tcpuxdo shortcut del NAME
+#   tcpuxdo shortcut ls
+#   tcpuxdo allow 1.2.3.4 | block 1.2.3.4 | get
+#   tcpuxdo doctor
+#===============================================================================
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+ENV_FILE="$HERE/.env"
+[[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE — cp .env.example .env and fill in TCPUX_HOST/PORT"; exit 1; }
+set -o allexport; . "$ENV_FILE"; set +o allexport
+
+case "${1:-}" in
+  doctor)
+    echo "== tcpuxdo doctor =="
+    for c in python3 tmux ssh; do command -v "$c" >/dev/null && echo "ok   $c ($(command -v $c))" || echo "MISS $c"; done
+    echo "--- .env ---"
+    : "${TCPUX_HOST:?TCPUX_HOST unset in .env}"; echo "ok   TCPUX_HOST=$TCPUX_HOST"
+    : "${TCPUX_PORT:?TCPUX_PORT unset in .env}"; echo "ok   TCPUX_PORT=$TCPUX_PORT"
+    [[ -n "${TCPUX_ADMIN_PORT:-}" ]] && echo "ok   TCPUX_ADMIN_PORT=$TCPUX_ADMIN_PORT" || echo "warn TCPUX_ADMIN_PORT unset (allowlist admin disabled)"
+    echo "--- relay reachability ($TCPUX_HOST:$TCPUX_PORT) ---"
+    if PYTHONPATH="$HERE" python3 - <<PY
+import os,sys
+from proto import rpc
+try:
+    r = rpc(os.environ["TCPUX_HOST"], int(os.environ["TCPUX_PORT"]), {"op":"state"})
+    print("ok   queue answered:", len(r.get("state",{})), "node(s) registered")
+except Exception as e:
+    print("FAIL queue unreachable:", e); sys.exit(1)
+PY
+    then echo "DOCTOR_OK"; else echo "DOCTOR_FAIL"; exit 1; fi
+    ;;
+  allow|block|get)
+    exec python3 "$HERE/allowlist_server.py" "$@"
+    ;;
+  shortcut|sc)
+    shift; sub="${1:-}"; shift || true
+    case "$sub" in
+      set)     name="${1:-}"; shift || true; exec python3 "$HERE/client.py" --op shortcut-set --name "$name" "$@" ;;
+      del|rm)  name="${1:-}"; shift || true; exec python3 "$HERE/client.py" --op shortcut-del --name "$name" "$@" ;;
+      ls|list)
+        PYTHONPATH="$HERE" exec python3 - <<'PY'
+import os, sys
+from proto import rpc
+r = rpc(os.environ["TCPUX_HOST"], int(os.environ["TCPUX_PORT"]), {"op":"shortcut-list"})
+sc = r.get("shortcuts", {})
+if not sc: print("(no shortcuts)"); sys.exit(0)
+B, X = "\033[1m", "\033[0m"; w = max(len(n) for n in sc)
+for n in sorted(sc): print(f"  {B}{n:<{w}}{X}  →  {sc[n]['worker']}/{sc[n]['pane']}")
+PY
+        ;;
+      *) echo "usage: tcpuxdo shortcut {set NAME -w NODE -p s:w:p [--force] | del NAME | ls}"; exit 1 ;;
+    esac
+    ;;
+  list|ls)
+    shift
+    PYTHONPATH="$HERE" exec python3 - "${1:-}" <<'PY'
+import os, sys
+from proto import rpc
+filt = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] else None
+r = rpc(os.environ["TCPUX_HOST"], int(os.environ["TCPUX_PORT"]), {"op": "state"})
+state, queue = r.get("state", {}), r.get("queue", {})
+if not state: print("(no nodes registered)"); sys.exit(0)
+G, Y, D, B, X = "\033[32m","\033[33m","\033[2m","\033[1m","\033[0m"
+for w in sorted(state):
+    if filt and w != filt: continue
+    panes = state[w].get("panes", {}); pending = len(queue.get(w, []))
+    print(f"{B}{w}{X}  {D}({len(panes)} panes, {pending} queued){X}")
+    for pid in sorted(panes):
+        p = panes[pid]; flag = f"{Y}busy{X}" if p.get("busy") else f"{G}idle{X}"
+        print(f"  {pid:<40} [{flag}] {p.get('cmd','?')}")
+PY
+    ;;
+  -h|--help|"")
+    python3 "$HERE/client.py" --help 2>/dev/null || true
+    echo
+    echo "tcpuxdo verbs:"
+    echo "  tcpuxdo -w NODE -p s:w:p -c 'CMD'   send-keys (auto-cascade on missing pane)"
+    echo "  tcpuxdo -s NAME -c 'CMD'            send-keys via shortcut"
+    echo "  tcpuxdo list [NODE]                 pretty-print nodes + panes"
+    echo "  tcpuxdo shortcut {set|del|ls}       manage pane shortcuts"
+    echo "  tcpuxdo allow|block <ip> | get      manage the relay IP allowlist"
+    echo "  tcpuxdo doctor                      check deps, .env, relay reachability"
+    ;;
+  *)
+    exec python3 "$HERE/client.py" "$@"
+    ;;
+esac

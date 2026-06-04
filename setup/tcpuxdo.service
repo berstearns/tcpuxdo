@@ -1,0 +1,19 @@
+# /etc/systemd/system/tcpuxdo.service
+# Run the tcpuxdo queue server forever on the relay, as an alternative to the
+# tmux-pane deploy (setup/01-relay-deploy.sh). Install:
+#   sudo cp setup/tcpuxdo.service /etc/systemd/system/tcpuxdo.service
+#   sudo systemctl enable --now tcpuxdo
+# Expects the engine in /srv/tcpuxdo and its .env there (TCPUX_HOST/PORT/...).
+[Unit]
+Description=tcpuxdo queue (tcpux dispatch engine)
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/tcpuxdo
+EnvironmentFile=/srv/tcpuxdo/.env
+ExecStart=/usr/bin/python3 /srv/tcpuxdo/server.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
