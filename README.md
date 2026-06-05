@@ -52,27 +52,71 @@ validates, it never touches a terminal.
 
 ---
 
-## Dynamics — what happens on one `send-keys`
+## Diagrams
+
+Plain-text source of both: [docs/architecture.ascii](./docs/architecture.ascii). Prose walkthrough:
+[docs/architecture.md](./docs/architecture.md). Command algebra: [AXIOMS.md](./AXIOMS.md).
+
+### Deploy / install — driven from main over SSH
 
 ```
-main                         relay (queue)                 node worker
- │  submit send-keys             │                              │
- │  -w nodeA -p s:1:1 -c "…" ───►│  axiom check (SK0…SK5)        │
- │                               │                              │
- │                               │◄──── poll (every 2s) ────────┤
- │                               │───── op: send-keys ─────────►│
- │                               │                       re-read pane state
- │                               │                       busy? ─► reject (pane busy)
- │                               │                       idle/claude ─► tmux send-keys -t s:1.1
- │                               │◄──── ack ────────────────────┤
- │                               │                       report panes (every 5s)
+┌──────────────────────────────────────── YOUR LAPTOP (main) ────────────────────────────────────────┐
+│  git clone tcpuxdo   +   .env  (TCPUX_HOST=<relay-ip>, TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_TOKEN)    │
+└───────┬──────────────────────────────┬───────────────────────────────────┬─────────────────────────┘
+        │ (1) 01-relay-deploy.sh        │ (2) 02-open-ports.sh              │ (4) 03-node-onboard.sh  (xN)
+        │     ssh + scp                 │     doctl / ufw                   │     ssh + scp
+        v                               v                                   v
+┌──────────────────── RELAY (DigitalOcean VPS) ────────────────────┐   ┌───────────── TTY NODE (xN) ─────────────┐
+│  /srv/tcpuxdo/  <- engine files scp'd from main                  │   │  /home/<user>/tcpuxdo/ <- engine scp'd  │
+│  .env written remotely:  TCPUX_HOST=0.0.0.0                      │   │  .env written remotely:                 │
+│  remote-queue.sh starts tmux session `tcpuxdo-queue`:            │   │     TCPUX_HOST=<relay-ip>  <- dials relay│
+│    +- pane tcpuxdo-queue-server  -> python server.py  :PORT      │   │     TCPUX_WORKER=<nodeA>   <- unique name│
+│    +- pane tcpuxdo-queue-admin   -> allowlist_server  :ADMIN_PORT│   │     TCPUX_IDLE_CMDS=...,claude           │
+│    +- pane tcpuxdo-queue-state   -> 5s state poller              │   │  remote-worker.sh starts `tcpuxdo-worker`:│
+│  (3) firewall opens PORT + ADMIN_PORT                            │   │    +- pane tcpuxdo-worker-main ->worker.py│
+└──────────────────────────────────────────────────────────────────┘   │    +- pane tcpuxdo-worker-obs  ->panesdump│
+        ^                                                                └───────────────────┬─────────────────────┘
+        │ (5) tcpuxdo allow <main-ip>; allow <each-node-ip>   (seed the IP gate)             │
+        └───────────────────────────────────────────────────────────────────────────────────┘
+                                 (6) 04-verify.sh  -> submit a harmless echo, watch it land
 ```
 
-If the target pane **doesn't exist yet**, the queue rejects with `SK3_PANE_NOT_EXIST` and the client
-**cascades**: `create-pane` → (if missing) `create-window` → (if missing) `create-session`, each
-itself axiom-checked, then retries the `send-keys`. A node that rebooted and lost its session
-self-heals on the next submit. Full algebra: [AXIOMS.md](./AXIOMS.md);
-walkthrough: [docs/architecture.md](./docs/architecture.md).
+Order: (1) ship+start relay → (2)/(3) open ports → (4) onboard each node → (5) allowlist IPs → (6) verify.
+
+### Working dynamics — steady state
+
+Two independent loops run forever on each node; main injects jobs on demand.
+
+```
+   YOUR LAPTOP (main)                 RELAY (VPS) — dumb, never runs tmux          TTY NODE (worker)
+ ┌────────────────────┐          ┌──────────────────────────────────────┐    ┌──────────────────────────┐
+ │ tcpuxdo -w nodeA   │          │  server.py                            │    │  worker.py loop:         │
+ │   -p work:1:1      │  submit  │   ┌────────────┐   ┌───────────────┐  │    │                          │
+ │   -c "git pull" ───┼─────────►│   │ IP gate    │──►│ axiom check    │  │    │                          │
+ │                    │  :PORT   │   │ (allowlist)│   │ SK0..SK4       │  │    │                          │
+ │                    │          │   └────────────┘   └──────┬────────┘  │    │                          │
+ │                    │          │                           v           │    │                          │
+ │                    │          │              ┌─ per-node queue[nodeA] ─┤    │   LOOP A — every POLL(2s)│
+ │                    │          │              │            ^           │    │◄── "any jobs for nodeA?" │
+ │                    │          │              │            └───── poll ─┼────┤                          │
+ │                    │          │              └──────────── job ───────►┼────┼──► got: send-keys op     │
+ │                    │          │                                        │    │      v re-read pane state│
+ │                    │          │                                        │    │   pane busy?  ──► reject │
+ │                    │          │                                        │    │   idle / claude ──► RUN: │
+ │                    │          │                                        │    │   tmux send-keys -t      │
+ │                    │          │              ack {ok} ◄────────────────┼────┤     work:1.1 "git pull"  │
+ │                    │          │                                        │    │                          │
+ │ tcpuxdo list ──────┼─────────►│   state registry[nodeA] = {panes,busy} │    │   LOOP B — every SYNC(5s)│
+ │   (read panes) ◄───┼──────────┤◄───────────── tmux-panes-update ───────┼────┤── report list-panes -a   │
+ └────────────────────┘          └──────────────────────────────────────┘    └──────────────────────────┘
+        keyboard                        validates + queues + remembers              the only place tmux runs
+```
+
+- **Two node loops, always on:** *A* pulls jobs (every `POLL`), *B* reports pane state (every `SYNC`).
+- **The busy/claude gate is decided on the node, fresh, right before typing.** A `claude` pane counts
+  as idle ⇒ the prompt lands as input; a build pane is busy ⇒ rejected (`SK5`).
+- **Missing pane?** The relay rejects `SK3_PANE_NOT_EXIST`; main's client **cascades**
+  `create-session → window → pane` then retries — so a rebooted node self-heals on the next submit.
 
 ---
 

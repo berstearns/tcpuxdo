@@ -1,0 +1,77 @@
+===============================================================================
+ tcpuxdo — architecture dynamics
+ tcpux dispatch engine (axiom-checked tmux command queue)  +  credpipe deploy skin
+===============================================================================
+
+
+1) DEPLOY / INSTALL DYNAMICS
+   Everything is driven FROM main over SSH. Nodes/relay never pull from git —
+   main pushes the engine to them. Each step = one command + inline env.
+
+┌──────────────────────────────────────── YOUR LAPTOP (main) ────────────────────────────────────────┐
+│  git clone tcpuxdo   +   .env  (TCPUX_HOST=<relay-ip>, TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_TOKEN)    │
+└───────┬──────────────────────────────┬───────────────────────────────────┬─────────────────────────┘
+        │ (1) 01-relay-deploy.sh        │ (2) 02-open-ports.sh              │ (4) 03-node-onboard.sh  (xN)
+        │     ssh + scp                 │     doctl / ufw                   │     ssh + scp
+        v                               v                                   v
+┌──────────────────── RELAY (DigitalOcean VPS) ────────────────────┐   ┌───────────── TTY NODE (xN) ─────────────┐
+│  /srv/tcpuxdo/  <- engine files scp'd from main                  │   │  /home/<user>/tcpuxdo/ <- engine scp'd  │
+│  .env written remotely:  TCPUX_HOST=0.0.0.0                      │   │  .env written remotely:                 │
+│                                                                  │   │     TCPUX_HOST=<relay-ip>  <- dials relay│
+│  remote-queue.sh starts tmux session `tcpuxdo-queue`:            │   │     TCPUX_WORKER=<nodeA>   <- unique name│
+│    +- pane tcpuxdo-queue-server  -> python server.py  :PORT      │   │     TCPUX_IDLE_CMDS=...,claude           │
+│    +- pane tcpuxdo-queue-admin   -> allowlist_server  :ADMIN_PORT│   │                                         │
+│    +- pane tcpuxdo-queue-state   -> 5s state poller              │   │  remote-worker.sh starts tmux session   │
+│                                                                  │   │  `tcpuxdo-worker`:                      │
+│  (3) firewall opens PORT + ADMIN_PORT                            │   │    +- pane tcpuxdo-worker-main ->worker.py│
+└──────────────────────────────────────────────────────────────────┘   │    +- pane tcpuxdo-worker-obs  ->panesdump│
+        ^                                                                └───────────────────┬─────────────────────┘
+        │ (5) tcpuxdo allow <main-ip>; allow <each-node-ip>   (seed the IP gate)             │
+        └───────────────────────────────────────────────────────────────────────────────────┘
+                                 (6) 04-verify.sh  -> submit a harmless echo, watch it land
+
+   Order:  (1) ship+start relay -> (2)+(3) open ports -> (4) onboard each node
+           -> (5) allowlist the IPs -> (6) verify.
+   Caveats: (5) is not auto-run yet; RUN_USER provisioning not wired.
+
+
+-------------------------------------------------------------------------------
+
+
+2) WORKING DYNAMICS  (steady state, after setup)
+   Two independent loops run forever on each node; main injects jobs on demand.
+
+   YOUR LAPTOP (main)                 RELAY (VPS) — dumb, never runs tmux          TTY NODE (worker)
+ ┌────────────────────┐          ┌──────────────────────────────────────┐    ┌──────────────────────────┐
+ │ tcpuxdo -w nodeA   │          │  server.py                            │    │  worker.py loop:         │
+ │   -p work:1:1      │  submit  │   ┌────────────┐   ┌───────────────┐  │    │                          │
+ │   -c "git pull" ───┼─────────►│   │ IP gate    │──►│ axiom check    │  │    │                          │
+ │                    │  :PORT   │   │ (allowlist)│   │ SK0..SK4       │  │    │                          │
+ │                    │          │   └────────────┘   └──────┬────────┘  │    │                          │
+ │                    │          │                           v           │    │                          │
+ │                    │          │              ┌─ per-node queue[nodeA] ─┤    │                          │
+ │                    │          │              │            ^           │    │   LOOP A — every POLL(2s)│
+ │                    │          │              │            └───── poll ─┼────┤◄── "any jobs for nodeA?" │
+ │                    │          │              └──────────── job ───────►┼────┼──► got: send-keys op     │
+ │                    │          │                                        │    │      │                   │
+ │                    │          │                                        │    │      v re-read pane state│
+ │                    │          │                                        │    │   pane busy?  ──► reject │
+ │                    │          │                                        │    │   idle / claude ──► RUN: │
+ │                    │          │                                        │    │   tmux send-keys -t      │
+ │                    │          │                                        │    │     work:1.1 "git pull"  │
+ │                    │          │              ack {ok} ◄────────────────┼────┤◄── ack                   │
+ │                    │          │                                        │    │                          │
+ │ tcpuxdo list ──────┼─────────►│   state registry[nodeA] = {panes,busy} │    │   LOOP B — every SYNC(5s)│
+ │   (read panes) ◄───┼──────────┤◄───────────── tmux-panes-update ───────┼────┤── report list-panes -a   │
+ └────────────────────┘          └──────────────────────────────────────┘    └──────────────────────────┘
+        keyboard                        validates + queues + remembers              the only place tmux runs
+
+   Read off it:
+   * Two node loops, always on: LOOP A pulls jobs (every POLL), LOOP B reports
+     pane state (every SYNC). The relay only holds the queue + last-known panes.
+   * The busy/claude gate is decided ON the node, fresh, right before typing —
+     not from the cached report. A `claude` pane counts as idle => the prompt
+     lands as input; a build pane is busy => rejected (SK5).
+   * If the pane doesn't exist, the relay rejects SK3_PANE_NOT_EXIST and main's
+     client cascades create-session -> window -> pane, then retries — so a
+     rebooted node self-heals on the next submit.
