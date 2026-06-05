@@ -20,9 +20,6 @@ RSSH "ls -ld $REMOTE_ROOT 2>/dev/null && tmux has-session -t ${QUEUE_SESSION:-tc
 say "Host firewall (ufw)"
 RSSH 'command -v ufw >/dev/null && ufw status 2>/dev/null | head -20 || echo "ufw: not installed/inactive"' || true
 
-if [ -n "${NODE_SSH:-}" ]; then
-  say "Node reachability + deps ($NODE_SSH)"
-  ssh "${SSH_OPTS[@]}" "$NODE_SSH" 'echo NODE_OK; for c in python3 tmux; do command -v $c >/dev/null && echo "ok $c" || echo "MISS $c"; done' || echo "node ssh FAILED"
-fi
-
+# (Nodes are not checked here — they are brought up on the node itself with
+#  setup/node-up.sh, not deployed over SSH from main.)
 echo "PREFLIGHT_DONE"

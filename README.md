@@ -57,31 +57,25 @@ validates, it never touches a terminal.
 Plain-text source of both: [docs/architecture.ascii](./docs/architecture.ascii). Prose walkthrough:
 [docs/architecture.md](./docs/architecture.md). Command algebra: [AXIOMS.md](./AXIOMS.md).
 
-### Deploy / install — driven from main over SSH
+### Deploy / install — clone + .env + one command, on each machine
 
 ```
-┌──────────────────────────────────────── YOUR LAPTOP (main) ────────────────────────────────────────┐
-│  git clone tcpuxdo   +   .env  (TCPUX_HOST=<relay-ip>, TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_TOKEN)    │
-└───────┬──────────────────────────────┬───────────────────────────────────┬─────────────────────────┘
-        │ (1) 01-relay-deploy.sh        │ (2) 02-open-ports.sh              │ (4) 03-node-onboard.sh  (xN)
-        │     ssh + scp                 │     doctl / ufw                   │     ssh + scp
-        v                               v                                   v
-┌──────────────────── RELAY (DigitalOcean VPS) ────────────────────┐   ┌───────────── TTY NODE (xN) ─────────────┐
-│  /srv/tcpuxdo/  <- engine files scp'd from main                  │   │  /home/<user>/tcpuxdo/ <- engine scp'd  │
-│  .env written remotely:  TCPUX_HOST=0.0.0.0                      │   │  .env written remotely:                 │
-│  remote-queue.sh starts tmux session `tcpuxdo-queue`:            │   │     TCPUX_HOST=<relay-ip>  <- dials relay│
-│    +- pane tcpuxdo-queue-server  -> python server.py  :PORT      │   │     TCPUX_WORKER=<nodeA>   <- unique name│
-│    +- pane tcpuxdo-queue-admin   -> allowlist_server  :ADMIN_PORT│   │     TCPUX_IDLE_CMDS=...,claude           │
-│    +- pane tcpuxdo-queue-state   -> 5s state poller              │   │  remote-worker.sh starts `tcpuxdo-worker`:│
-│  (3) firewall opens PORT + ADMIN_PORT                            │   │    +- pane tcpuxdo-worker-main ->worker.py│
-└──────────────────────────────────────────────────────────────────┘   │    +- pane tcpuxdo-worker-obs  ->panesdump│
-        ^                                                                └───────────────────┬─────────────────────┘
-        │ (5) tcpuxdo allow <main-ip>; allow <each-node-ip>   (seed the IP gate)             │
-        └───────────────────────────────────────────────────────────────────────────────────┘
-                                 (6) 04-verify.sh  -> submit a harmless echo, watch it land
+   RELAY (VPS)                       YOUR LAPTOP (main)                  TTY NODE (xN)
+ clone + .env + relay-up.sh        clone + .env + ln -s tcpuxdo       clone + .env + node-up.sh
+ ┌────────────────────────┐       ┌────────────────────────┐        ┌────────────────────────┐
+ │ server.py        :9100  │       │ tcpuxdo doctor          │        │ worker.py --host RELAY  │
+ │ allowlist_server :9101  │       │ tcpuxdo list / -w … -c  │        │ polls relay, runs tmux  │
+ │ state poller            │       │                         │        │ (claude pane = idle)    │
+ └────────────────────────┘       └───────────┬────────────┘        └────────────────────────┘
+      ▲    ▲                                   │
+      │    └─ (RELAY-ONLY exception) ──────────┤ 01-relay-deploy.sh (ssh) + 02-open-ports.sh
+      │       deploy the relay from main        │
+      └──────────── tcpuxdo allow <main-ip>; allow <each-node-ip> ──► seeds the IP gate
 ```
 
-Order: (1) ship+start relay → (2)/(3) open ports → (4) onboard each node → (5) allowlist IPs → (6) verify.
+**Default: clone + `.env` + one command per box.** A node is brought up **on the node**
+(`node-up.sh`) — never SSH-pushed. Only the relay may *also* be deployed from main over SSH
+(`01-relay-deploy.sh` → ships the repo + runs `relay-up.sh` remotely).
 
 ### Working dynamics — steady state
 
@@ -132,7 +126,10 @@ Two independent loops run forever on each node; main injects jobs on demand.
     allowlist.seed.json      — initial allowed IPs (bootstrap only)
     proto.py                 — framed-JSON TCP helpers (zero deps)
     AXIOMS.md                — the formal command algebra
-    setup/                   — numbered deploy scripts (00-preflight … 04-verify)
+    setup/relay-up.sh        — run ON the relay: start the queue (default bring-up)
+    setup/node-up.sh         — run ON a node: start the worker (the only node path)
+    setup/01-relay-deploy.sh — EXCEPTION: deploy the relay FROM main over SSH
+    setup/{00,02,04}*.sh      — main-side helpers: preflight, open-ports, verify
     docs/                    — architecture + deployment + onboarding
     docs/runbook/            — masked per-pane runbooks (the unmasked ones live in /runbook/, gitignored)
 
@@ -153,36 +150,30 @@ sudo pacman -S python tmux
 
 ---
 
-## Install
+## Setup — one pattern for every machine
+
+**`git clone` → `cp .env.example .env` → one command.** That's it, on each box. `.env` is
+git-ignored; the repo is public, **your deployment is not.** Full detail: [docs/deployment.md](./docs/deployment.md).
 
 ```sh
-git clone https://github.com/berstearns/tcpuxdo ~/tcpuxdo
-cd ~/tcpuxdo
-cp .env.example .env
-$EDITOR .env                 # set TCPUX_HOST=your.vps.ip and the two ports — that's the core
-ln -s "$PWD/tcpuxdo" ~/bin/tcpuxdo
-tcpuxdo doctor               # sanity-check python/tmux, .env, relay reachability
+git clone https://github.com/berstearns/tcpuxdo && cd tcpuxdo
+cp .env.example .env && $EDITOR .env       # set TCPUX_HOST + ports (+ token on relay/main)
 ```
+then the one command for this machine's role:
 
-`.env` is git-ignored. The repo is public; **your deployment is not.**
+| Role | one command (run on that machine) |
+|------|-----------------------------------|
+| **relay** (VPS) | `bash setup/relay-up.sh` |
+| **node** (tty box) | `bash setup/node-up.sh` |
+| **main** (laptop) | `ln -s "$PWD/tcpuxdo" ~/bin/tcpuxdo && tcpuxdo doctor` |
 
----
+Then allowlist who may reach the queue: `tcpuxdo allow <ip>` for main and each node's egress IP.
+Node detail: [docs/onboard-tty-node.md](./docs/onboard-tty-node.md).
 
-## Setup (do this once, in order)
-
-Each script is committed, idempotent, and dispatches the real work into a **titled tmux pane** on
-the target — never run ad-hoc. Source of truth for what each pane runs:
-[`docs/runbook/`](./docs/runbook).
-
-```sh
-bash setup/00-preflight.sh       # check relay SSH + python/tmux on relay & nodes
-bash setup/01-relay-deploy.sh    # ship the engine to the VPS, start the queue in a titled pane
-bash setup/02-open-ports.sh      # open the queue/admin ports on the relay firewall
-bash setup/03-node-onboard.sh    # onboard a tty node: install engine, start a worker pane
-bash setup/04-verify.sh          # end-to-end: submit a no-op send-keys and watch it land
-```
-
-Run `03-node-onboard.sh` once per node. See [docs/onboard-tty-node.md](./docs/onboard-tty-node.md).
+> **One exception (relay only):** instead of cloning on the VPS, you can deploy the relay *from
+> main over SSH* — `bash setup/00-preflight.sh && bash setup/01-relay-deploy.sh && bash
+> setup/02-open-ports.sh`. It ships this repo and runs `relay-up.sh` remotely. **Nodes never get
+> an SSH-push path** — a node is always brought up on the node with `setup/node-up.sh`.
 
 ---
 
@@ -228,8 +219,8 @@ a pane running a build or a REPL is `busy` and the op is rejected (`SK5`). Overr
 TCPUX_IDLE_CMDS="bash,zsh,fish,sh,claude,node" tcpuxdo …    # or set it in the node's .env
 ```
 
-To run the worker as a **non-root `claude` user** (Claude Code refuses `--dangerously-skip-permissions`
-as root), `setup/03-node-onboard.sh` provisions that user and starts the worker pane under it.
+Claude Code refuses `--dangerously-skip-permissions` as root, so on the node run `setup/node-up.sh`
+as the **non-root user that owns your Claude pane** — the worker then drives that user's panes.
 
 ---
 

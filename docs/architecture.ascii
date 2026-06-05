@@ -5,34 +5,29 @@
 
 
 1) DEPLOY / INSTALL DYNAMICS
-   Everything is driven FROM main over SSH. Nodes/relay never pull from git —
-   main pushes the engine to them. Each step = one command + inline env.
+   DEFAULT for every machine: git clone  +  cp .env.example .env  +  ONE command,
+   run ON that machine. Nodes are never SSH-pushed. The relay alone has an
+   exception: it MAY be deployed from main over SSH (01-relay-deploy.sh).
 
-┌──────────────────────────────────────── YOUR LAPTOP (main) ────────────────────────────────────────┐
-│  git clone tcpuxdo   +   .env  (TCPUX_HOST=<relay-ip>, TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_TOKEN)    │
-└───────┬──────────────────────────────┬───────────────────────────────────┬─────────────────────────┘
-        │ (1) 01-relay-deploy.sh        │ (2) 02-open-ports.sh              │ (4) 03-node-onboard.sh  (xN)
-        │     ssh + scp                 │     doctl / ufw                   │     ssh + scp
-        v                               v                                   v
-┌──────────────────── RELAY (DigitalOcean VPS) ────────────────────┐   ┌───────────── TTY NODE (xN) ─────────────┐
-│  /srv/tcpuxdo/  <- engine files scp'd from main                  │   │  /home/<user>/tcpuxdo/ <- engine scp'd  │
-│  .env written remotely:  TCPUX_HOST=0.0.0.0                      │   │  .env written remotely:                 │
-│                                                                  │   │     TCPUX_HOST=<relay-ip>  <- dials relay│
-│  remote-queue.sh starts tmux session `tcpuxdo-queue`:            │   │     TCPUX_WORKER=<nodeA>   <- unique name│
-│    +- pane tcpuxdo-queue-server  -> python server.py  :PORT      │   │     TCPUX_IDLE_CMDS=...,claude           │
-│    +- pane tcpuxdo-queue-admin   -> allowlist_server  :ADMIN_PORT│   │                                         │
-│    +- pane tcpuxdo-queue-state   -> 5s state poller              │   │  remote-worker.sh starts tmux session   │
-│                                                                  │   │  `tcpuxdo-worker`:                      │
-│  (3) firewall opens PORT + ADMIN_PORT                            │   │    +- pane tcpuxdo-worker-main ->worker.py│
-└──────────────────────────────────────────────────────────────────┘   │    +- pane tcpuxdo-worker-obs  ->panesdump│
-        ^                                                                └───────────────────┬─────────────────────┘
-        │ (5) tcpuxdo allow <main-ip>; allow <each-node-ip>   (seed the IP gate)             │
-        └───────────────────────────────────────────────────────────────────────────────────┘
-                                 (6) 04-verify.sh  -> submit a harmless echo, watch it land
+   RELAY (VPS)                          YOUR LAPTOP (main)                   TTY NODE (xN)
+ clone + .env + relay-up.sh           clone + .env + ln -s tcpuxdo        clone + .env + node-up.sh
+ ┌────────────────────────┐          ┌────────────────────────┐         ┌────────────────────────┐
+ │ tmux `tcpuxdo-queue`:   │          │ tcpuxdo doctor          │         │ tmux `tcpuxdo-worker`:  │
+ │  server.py        :9100 │          │ tcpuxdo list            │         │  worker.py --host RELAY │
+ │  allowlist_server :9101 │          │ tcpuxdo -w N -p P -c …   │         │  obs: list-panes -a 3s  │
+ │  state poller           │          │                         │         │  (claude pane = idle)   │
+ └────────────────────────┘          └───────────┬────────────┘         └────────────────────────┘
+      ^     ^                                     │
+      │     └── RELAY-ONLY exception ─────────────┤  (1) 00-preflight  (2) 01-relay-deploy (ssh+scp)
+      │         deploy relay from main             │  (3) 02-open-ports (firewall)
+      │                                            │
+      └───────────── tcpuxdo allow <main-ip>; allow <each-node-ip> ──► seeds the IP gate
+                                 then: 04-verify.sh -> submit a harmless echo, watch it land
 
-   Order:  (1) ship+start relay -> (2)+(3) open ports -> (4) onboard each node
-           -> (5) allowlist the IPs -> (6) verify.
-   Caveats: (5) is not auto-run yet; RUN_USER provisioning not wired.
+   .env per role (git-ignored; the repo is public, the deployment is not):
+     relay : TCPUX_HOST=0.0.0.0  TCPUX_PORT  TCPUX_ADMIN_PORT  TCPUX_ADMIN_TOKEN
+     main  : TCPUX_HOST=<relay>  TCPUX_PORT  TCPUX_ADMIN_PORT  TCPUX_ADMIN_TOKEN  TCPUX_ADMIN_HOST=<relay>
+     node  : TCPUX_HOST=<relay>  TCPUX_PORT  TCPUX_WORKER=<unique>     (no secret — IP-gated only)
 
 
 -------------------------------------------------------------------------------

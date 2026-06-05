@@ -1,64 +1,74 @@
 # Deployment
 
-Three roles, deployed in order. All real values live in the git-ignored `.env`; the scripts read
-them from there. See `.env.example` for every key.
+**One pattern for every machine: `git clone` → `cp .env.example .env` → one command.**
+Real values live only in the git-ignored `.env`. The repo is public; your deployment is not.
 
-## 0. Configure (on main)
+| Role | Where you run it | The one command |
+|------|------------------|-----------------|
+| **relay** | on the VPS (default) | `bash setup/relay-up.sh` |
+| **node** | on the tty box | `bash setup/node-up.sh` |
+| **main** | your laptop | `tcpuxdo …` (after `ln -s "$PWD/tcpuxdo" ~/bin/tcpuxdo`) |
 
+> **The one exception:** the **relay** may instead be deployed *from main over SSH* with
+> `setup/01-relay-deploy.sh` (handy for a fresh VPS you don't want to clone on). It just ships this
+> repo + runs `relay-up.sh` remotely. **Nodes have no such path** — always bring a node up on the
+> node itself.
+
+---
+
+## Relay
+
+**Default — on the VPS:**
 ```sh
-cp .env.example .env
-$EDITOR .env
-# minimum: TCPUX_HOST (relay ip), TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_ADMIN_TOKEN
-ln -s "$PWD/tcpuxdo" ~/bin/tcpuxdo
+git clone https://github.com/berstearns/tcpuxdo /srv/tcpuxdo && cd /srv/tcpuxdo
+cp .env.example .env      # set TCPUX_PORT, TCPUX_ADMIN_PORT, TCPUX_ADMIN_TOKEN (openssl rand -hex 32)
+bash setup/relay-up.sh
 ```
 
-Generate the admin token with `openssl rand -hex 32`.
-
-## 1. Relay (the VPS that holds the queue)
-
+**Exception — from main over SSH:**
 ```sh
+export TCPUX_HOST=<relay-ip> TCPUX_PORT=9100 TCPUX_ADMIN_PORT=9101
+export TCPUX_ADMIN_TOKEN=$(openssl rand -hex 32)   # save this
 bash setup/00-preflight.sh      # ssh reachable? python3 + tmux present?
-bash setup/01-relay-deploy.sh   # ship engine, start queue in a titled tmux session
-bash setup/02-open-ports.sh     # open TCPUX_PORT + TCPUX_ADMIN_PORT on the firewall
+bash setup/01-relay-deploy.sh   # ship repo + run relay-up.sh remotely
+bash setup/02-open-ports.sh     # open the ports on the relay firewall
 ```
 
-`01` writes a relay-scoped `.env` on the VPS (binds `0.0.0.0`) and runs `remote-queue.sh`, which
-brings up the `tcpuxdo-queue` session with three titled panes:
+Either way the relay ends up with the `tcpuxdo-queue` session, three titled panes:
 
-| pane title | runs |
-|------------|------|
+| pane | runs |
+|------|------|
 | `tcpuxdo-queue-server` | `server.py` — the axiom-checked queue |
-| `tcpuxdo-queue-admin`  | `allowlist_server.py serve` — IP allowlist admin |
-| `tcpuxdo-queue-state`  | a 5s `state` poller (live view of nodes + queues) |
+| `tcpuxdo-queue-admin`  | `allowlist_server.py serve` — IP-allowlist admin |
+| `tcpuxdo-queue-state`  | a 5s `state` poller |
 
-Lock the gate immediately:
-
+Open the ports (cloud firewall + host) and lock the gate:
 ```sh
-tcpuxdo allow <main-egress-ip>
-tcpuxdo allow <each-node-egress-ip>
+tcpuxdo allow <main-ip>          # and each node's egress ip
 tcpuxdo get
 ```
 
-Prefer to daemonize instead of a tmux pane? Use `setup/tcpuxdo.service`.
+## Node (each tty box)
 
-## 2. Nodes (each tty box, once)
-
+On the node — see [onboard-tty-node.md](./onboard-tty-node.md):
 ```sh
-NODE_SSH=user@nodeA TCPUX_WORKER=nodeA RUN_USER=claude \
-  bash setup/03-node-onboard.sh
+git clone https://github.com/berstearns/tcpuxdo ~/tcpuxdo && cd ~/tcpuxdo
+cp .env.example .env             # TCPUX_HOST=<relay-ip>, TCPUX_PORT, TCPUX_WORKER=<unique>
+bash setup/node-up.sh
+# then, from anywhere with the admin token:
+tcpuxdo allow <node-egress-ip>
 ```
 
-See [onboard-tty-node.md](./onboard-tty-node.md) for the per-node detail and the non-root
-Claude-Code user.
-
-## 3. Verify (from main)
+## Main (your laptop)
 
 ```sh
-bash setup/04-verify.sh nodeA
-tcpuxdo list nodeA          # see the node's panes (idle/busy)
+git clone https://github.com/berstearns/tcpuxdo ~/tcpuxdo && cd ~/tcpuxdo
+cp .env.example .env             # TCPUX_HOST=<relay-ip>, TCPUX_PORT, admin pair + TCPUX_ADMIN_HOST=$TCPUX_HOST
+ln -s "$PWD/tcpuxdo" ~/bin/tcpuxdo
+tcpuxdo doctor
 ```
 
-## Day-to-day
+## Day-to-day (from main)
 
 ```sh
 tcpuxdo list                                  # all nodes + panes
@@ -67,4 +77,10 @@ tcpuxdo shortcut set claude-main -w nodeA -p work:1:1
 tcpuxdo -s claude-main -c '/compact'          # send to the Claude pane by name
 ```
 
-> Pane indices are 1-based here (`pane-base-index=1`), so the first pane is `.1`.
+> Pane indices are 1-based (`pane-base-index=1`), so the first pane is `.1`.
+
+## Verify (from main)
+
+```sh
+bash setup/04-verify.sh nodeA
+```

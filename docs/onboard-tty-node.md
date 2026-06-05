@@ -1,57 +1,60 @@
 # Onboard a tty node
 
-One node = one `worker.py` polling the relay and executing tmux ops locally. Run
-`setup/03-node-onboard.sh` once per node; it is idempotent.
+One node = one `worker.py` polling the relay and executing tmux ops locally. Nodes follow the
+**default tcpuxdo pattern — done ON the node**: clone, set `.env`, run one command. They are
+**not** deployed over SSH from main (only the relay has that exception).
 
-## Command
+## On the node (3 steps)
 
 ```sh
-NODE_SSH=user@nodeA \
-NODE_ROOT=/home/claude/tcpuxdo \
-TCPUX_WORKER=nodeA \
-RUN_USER=claude \
-  bash setup/03-node-onboard.sh
+git clone https://github.com/berstearns/tcpuxdo ~/tcpuxdo
+cd ~/tcpuxdo
+cp .env.example .env && $EDITOR .env     # set the 3 lines below
+bash setup/node-up.sh                    # the single command
 ```
 
-| var | meaning |
-|-----|---------|
-| `NODE_SSH` | ssh target of the node (required) |
-| `TCPUX_WORKER` | worker name — **must be unique per node**; how you address it from main (required) |
-| `NODE_ROOT` | install dir on the node (default `/home/<user>/tcpuxdo`) |
-| `RUN_USER` | user the worker (and Claude Code) run as |
+The only `.env` lines a node needs:
 
-## What it does
+```sh
+TCPUX_HOST=<relay-ip>     # the node DIALS the relay (never 0.0.0.0 / 127.0.0.1)
+TCPUX_PORT=<queue-port>   # e.g. 9100
+TCPUX_WORKER=<nodeA>      # unique per node — how main addresses it
+```
 
-1. `scp`s the engine + `remote-worker.sh` to `NODE_ROOT`.
-2. Writes a node `.env` that **dials the relay** (`TCPUX_HOST=<relay>`, `TCPUX_PORT`), sets the
-   worker name, poll/sync intervals, and `TCPUX_IDLE_CMDS` (includes `claude`).
-3. Runs `remote-worker.sh`, which starts the `tcpuxdo-worker` session with two titled panes:
+A node holds **no secret** — no admin token, no key. It's authenticated by its source IP at the
+relay's gate (see allowlist below).
+
+## What `node-up.sh` does
+
+Idempotent. Reads `.env`, then starts the `tcpuxdo-worker` session with two titled panes:
 
 | pane title | runs |
 |------------|------|
-| `tcpuxdo-worker-main` | `worker.py --name <node>` — the poll/exec/ack loop |
+| `tcpuxdo-worker-main` | `worker.py --name <node> --host <relay> --port <port>` — poll/exec/ack loop |
 | `tcpuxdo-worker-obs`  | a 3s `tmux list-panes -a` dump — live view of what the worker sees |
+
+## Allowlist the node (once, from anywhere with the admin token)
+
+The node's egress IP must be on the relay's allowlist or its polls are rejected:
+
+```sh
+# on the node, find its public IP:
+curl -s ifconfig.me
+# from main (or any box with .env's admin token):
+tcpuxdo allow <node-egress-ip>
+tcpuxdo list <node>           # confirm it registered
+```
 
 ## The Claude Code pane
 
-- Claude Code refuses `--dangerously-skip-permissions` as root, so run the worker as a non-root
-  `RUN_USER`. The worker then drives panes owned by that user.
-- Because `claude` is in `TCPUX_IDLE_CMDS`, a pane running Claude Code is `idle` (safe to type into).
-  A pane running a build is `busy` and `send-keys` is refused (`SK5`).
-- Start your Claude session in a pane on the node, note its `session:window:pane`, and register a
-  shortcut from main:
+- Run the worker as the same user that owns your Claude pane. Claude Code refuses
+  `--dangerously-skip-permissions` as root, so use a non-root user on the node.
+- `claude` is in `TCPUX_IDLE_CMDS`, so a pane running Claude Code is `idle` (safe to type into); a
+  pane running a build is `busy` and `send-keys` is refused (`SK5`).
+- Start your Claude session in a pane on the node, find its id, and address it from main:
 
   ```sh
-  tcpuxdo list nodeA                                   # find the pane id
-  tcpuxdo shortcut set nodeA-claude -w nodeA -p work:1:1
-  tcpuxdo -s nodeA-claude -c 'summarize the last test run'
+  tcpuxdo list <node>                                   # find the pane id (1-based!)
+  tcpuxdo shortcut set <node>-claude -w <node> -p work:1:1
+  tcpuxdo -s <node>-claude -c 'summarize the last test run'
   ```
-
-## Allowlist
-
-The node's egress IP must be allowed on the relay, or its polls are rejected before reaching the
-queue:
-
-```sh
-tcpuxdo allow <node-egress-ip>     # run from main, once per node
-```

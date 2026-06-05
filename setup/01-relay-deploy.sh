@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
-# Ship the engine to the relay VPS and start the queue server inside a titled
-# tmux session:window:panes (server / admin / state). Idempotent.
+# EXCEPTION PATH (relay only): deploy the relay FROM main over SSH instead of
+# the default "git clone on the box + cp .env + bash setup/relay-up.sh". It
+# ships this repo's engine + setup/relay-up.sh to the VPS, writes a relay .env,
+# and runs setup/relay-up.sh remotely. Idempotent. (Nodes have no such path —
+# they are always brought up locally with setup/node-up.sh.)
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 trap 'on_err $LINENO' ERR
 
 say "Sync engine → $VPS_SSH:$REMOTE_ROOT  (transport: $TRANSPORT)"
-RSSH "mkdir -p $REMOTE_ROOT"
+RSSH "mkdir -p $REMOTE_ROOT/setup"
 for f in "${ENGINE[@]}"; do
   RSCP "$REPO_ROOT/$f" "$VPS_SSH:$REMOTE_ROOT/$f"
 done
-# Ship the remote launcher + a relay-scoped .env (host=0.0.0.0 to bind all ifaces).
-RSCP "$REPO_ROOT/setup/remote-queue.sh" "$VPS_SSH:$REMOTE_ROOT/remote-queue.sh"
+# Ship the launcher into setup/ so relay-up.sh resolves ROOT=$REMOTE_ROOT.
+RSCP "$REPO_ROOT/setup/relay-up.sh" "$VPS_SSH:$REMOTE_ROOT/setup/relay-up.sh"
 RSSH "cat > $REMOTE_ROOT/.env" <<EOF
 TCPUX_HOST=0.0.0.0
 TCPUX_PORT=${PORT}
@@ -26,7 +29,7 @@ QUEUE_PANE_STATE=${QUEUE_PANE_STATE:-tcpuxdo-queue-state}
 PYTHON=python3
 EOF
 
-say "Start queue in titled panes (remote-queue.sh)"
-RSSH "bash $REMOTE_ROOT/remote-queue.sh $REMOTE_ROOT"
+say "Start queue (runs setup/relay-up.sh on the relay — same script as the default path)"
+RSSH "cd $REMOTE_ROOT && bash setup/relay-up.sh"
 
 echo "RELAY_DEPLOY_DONE — now run setup/02-open-ports.sh"

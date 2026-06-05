@@ -2,7 +2,8 @@
 
 Role: poll the relay, report this node's pane state, execute queued tmux ops locally. Session
 `tcpuxdo-worker`, window `worker`, pane title `tcpuxdo-worker-main`, cwd `<node-root>`
-(default `/home/<run-user>/tcpuxdo`), running as `<run-user>` (e.g. `claude`).
+(the clone, e.g. `~/tcpuxdo`), running as the user that owns your Claude pane.
+Brought up **on the node** — clone + `.env` + `bash setup/node-up.sh` — never over SSH from main.
 
 > Real per-deployment values are masked as `<…>`. The unmasked copy lives in the git-ignored
 > `runbook/`.
@@ -19,18 +20,20 @@ runs a 3s `tmux list-panes -a` dump so you can see exactly what the worker sees.
 
 ## Gotcha hit
 
-- Worker dials the **relay** host (`<relay-ip>`), not `0.0.0.0`. The node `.env` written by
-  `03-node-onboard.sh` sets `TCPUX_HOST=<relay-ip>` precisely for this.
+- Worker dials the **relay** host (`<relay-ip>`), not `0.0.0.0`/`127.0.0.1`. Set
+  `TCPUX_HOST=<relay-ip>` in the node's `.env`; `node-up.sh` passes it as `--host`.
 - If polls silently get nothing, the node's egress IP probably isn't allowed yet:
-  run `tcpuxdo allow <node-egress-ip>` from main.
-- `--name` must be unique per node. Two nodes sharing a name collide in the relay's registry and
-  ops route to whichever reported last.
+  run `tcpuxdo allow <node-egress-ip>` (from anywhere holding the admin token).
+- `TCPUX_WORKER` must be unique per node. Two nodes sharing a name collide in the relay's registry
+  and ops route to whichever reported last.
 
 ## Equivalent repo script
 
 ```sh
-NODE_SSH=<user>@<node> TCPUX_WORKER=<node> RUN_USER=<run-user> \
-  bash setup/03-node-onboard.sh      # from main: ship + start this pane
+# ON the node (the only supported path — no SSH push from main):
+git clone https://github.com/berstearns/tcpuxdo ~/tcpuxdo && cd ~/tcpuxdo
+cp .env.example .env   # set TCPUX_HOST=<relay>, TCPUX_PORT, TCPUX_WORKER=<node>
+bash setup/node-up.sh
 ```
 
 ## Notes
