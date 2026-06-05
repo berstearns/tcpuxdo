@@ -19,6 +19,21 @@ VPS_USER="${VPS_USER:-${TCPUX_VPS_USER:-root}}"
 VPS_SSH="$VPS_USER@$VPS_HOST"
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10)
 
+# Relay transport. The DO droplet uses password auth via ~/.do-pass, so prefer
+# the do-automation sshpass wrappers when present; fall back to key-auth ssh.
+# RSSH "<remote cmd>"           runs the command on the relay (stdin passes through)
+# RSCP <src> "$VPS_SSH:<dst>"   copies to the relay
+DO_AUTO="${DO_AUTO:-$HOME/p/all-my-tiny-projects/do-automation}"
+if [ -f "$HOME/.do-pass" ] && [ -x "$DO_AUTO/do-ssh-pass" ]; then
+  RSSH(){ DO_HOST="$VPS_HOST" "$DO_AUTO/do-ssh-pass" "$@"; }
+  RSCP(){ "$DO_AUTO/do-scp-pass" "$@"; }
+  TRANSPORT="do-automation (sshpass via ~/.do-pass)"
+else
+  RSSH(){ ssh "${SSH_OPTS[@]}" "$VPS_SSH" "$@"; }
+  RSCP(){ scp "${SSH_OPTS[@]}" "$@"; }
+  TRANSPORT="ssh key-auth"
+fi
+
 PORT="${TCPUX_PORT:?set TCPUX_PORT in .env}"
 ADMIN_PORT="${TCPUX_ADMIN_PORT:-}"
 REMOTE_ROOT="${REMOTE_ROOT:-/srv/tcpuxdo}"

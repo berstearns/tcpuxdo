@@ -16,7 +16,7 @@ else
 fi
 
 say "Host ufw on relay: allow $PORT, $ADMIN_PORT"
-ssh "${SSH_OPTS[@]}" "$VPS_SSH" "command -v ufw >/dev/null && { ufw allow $PORT/tcp; ufw allow $ADMIN_PORT/tcp; ufw status | head; } || echo 'ufw not present — skipping'" || true
+RSSH "command -v ufw >/dev/null && { ufw allow $PORT/tcp; ufw allow $ADMIN_PORT/tcp; ufw status | head; } || echo 'ufw not present — skipping'" || true
 
 say "REMINDER: lock down with the IP allowlist"
 echo "  tcpuxdo allow <your-main-ip>     # and each node's egress ip"

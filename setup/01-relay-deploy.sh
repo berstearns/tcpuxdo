@@ -4,14 +4,14 @@
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 trap 'on_err $LINENO' ERR
 
-say "Sync engine → $VPS_SSH:$REMOTE_ROOT"
-ssh "${SSH_OPTS[@]}" "$VPS_SSH" "mkdir -p $REMOTE_ROOT"
+say "Sync engine → $VPS_SSH:$REMOTE_ROOT  (transport: $TRANSPORT)"
+RSSH "mkdir -p $REMOTE_ROOT"
 for f in "${ENGINE[@]}"; do
-  scp "${SSH_OPTS[@]}" "$REPO_ROOT/$f" "$VPS_SSH:$REMOTE_ROOT/$f"
+  RSCP "$REPO_ROOT/$f" "$VPS_SSH:$REMOTE_ROOT/$f"
 done
 # Ship the remote launcher + a relay-scoped .env (host=0.0.0.0 to bind all ifaces).
-scp "${SSH_OPTS[@]}" "$REPO_ROOT/setup/remote-queue.sh" "$VPS_SSH:$REMOTE_ROOT/remote-queue.sh"
-ssh "${SSH_OPTS[@]}" "$VPS_SSH" "cat > $REMOTE_ROOT/.env" <<EOF
+RSCP "$REPO_ROOT/setup/remote-queue.sh" "$VPS_SSH:$REMOTE_ROOT/remote-queue.sh"
+RSSH "cat > $REMOTE_ROOT/.env" <<EOF
 TCPUX_HOST=0.0.0.0
 TCPUX_PORT=${PORT}
 TCPUX_ADMIN_PORT=${ADMIN_PORT:?set TCPUX_ADMIN_PORT in .env}
@@ -27,6 +27,6 @@ PYTHON=python3
 EOF
 
 say "Start queue in titled panes (remote-queue.sh)"
-ssh "${SSH_OPTS[@]}" "$VPS_SSH" "bash $REMOTE_ROOT/remote-queue.sh $REMOTE_ROOT"
+RSSH "bash $REMOTE_ROOT/remote-queue.sh $REMOTE_ROOT"
 
 echo "RELAY_DEPLOY_DONE — now run setup/02-open-ports.sh"
