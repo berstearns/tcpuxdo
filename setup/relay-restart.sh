@@ -1,29 +1,25 @@
 #!/usr/bin/env bash
 #===============================================================================
-# relay-restart.sh — restart ONLY the tcpuxdo queue server pane in place, so it
-# reloads server.py after a code ship. Run ON the relay.
+# relay-restart.sh — reload the tcpuxdo queue server in place after a code pull,
+# by respawning ONLY the server pane. Run ON the relay (cwd = the live repo).
 #
-# The scp-deploy path (01-relay-deploy.sh) ships fresh engine files but
-# relay-up.sh deliberately leaves a running server pane alone — so after a ship
-# the process is still executing the OLD code in memory. This is the missing
-# "reload" step: Ctrl-C the server pane and re-launch server.py in it.
+# `respawn-pane -k` atomically replaces the pane's process — the same move the
+# relay's own redeploy history uses — so there is no C-c/re-run race and the
+# port is reclaimed cleanly. The pane is found by title across the whole
+# session, so it works regardless of which window holds it.
 #===============================================================================
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
-cd "$ROOT"
 SESSION="${QUEUE_SESSION:-tcpuxdo-queue}"
-WINDOW="${QUEUE_WINDOW:-queue}"
 SERVER_TITLE="${QUEUE_PANE_SERVER:-tcpuxdo-queue-server}"
 
-pane=$(tmux list-panes -t "$SESSION:$WINDOW" -F '#{pane_index} #{pane_title}' \
+pane=$(tmux list-panes -t "$SESSION" -a -F '#{window_index}.#{pane_index} #{pane_title}' 2>/dev/null \
         | awk -v t="$SERVER_TITLE" 'index($0,t){print $1; exit}')
-pane="${pane:-0}"
+[ -n "$pane" ] || { echo "server pane '$SERVER_TITLE' not found in session '$SESSION'"; exit 1; }
 
-echo "restarting server pane $SESSION:$WINDOW.$pane ($SERVER_TITLE)…"
-tmux send-keys -t "$SESSION:$WINDOW.$pane" C-c
-sleep 1
-tmux send-keys -t "$SESSION:$WINDOW.$pane" \
-  "cd $ROOT && set -o allexport && . ./.env && set +o allexport && python3 server.py" Enter
+echo "respawning $SESSION:$pane ($SERVER_TITLE) from $ROOT …"
+tmux respawn-pane -k -t "$SESSION:$pane" \
+  "cd $ROOT && set -a && . ./.env && set +a && exec python3 server.py"
 sleep 2
-echo "── recent server pane output ──────────────────────────────"
-tmux capture-pane -p -t "$SESSION:$WINDOW.$pane" | tail -10
+echo "── server pane after respawn ──────────────────────────────"
+tmux capture-pane -p -t "$SESSION:$pane" | tail -10
