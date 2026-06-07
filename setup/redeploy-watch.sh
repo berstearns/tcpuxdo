@@ -17,11 +17,21 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$ROOT"
+[ -f .env ] && { set -a; . ./.env; set +a; }   # read-only: for session names below
 BRANCH="${REDEPLOY_BRANCH:-master}"
 
-# auto-default the restart + health to the repo's own idempotent tooling
+# auto-default the restart to the role's in-place RELOAD script. node-up.sh /
+# relay-up.sh deliberately leave a RUNNING pane alone, so they pull-but-never-
+# reload; relay-restart.sh / worker-restart.sh respawn the pane so new code
+# actually loads. Pick by which session this host runs.
 if [ -z "${REDEPLOY_RESTART:-}" ]; then
-  [ -f setup/node-up.sh ] && REDEPLOY_RESTART="bash setup/node-up.sh" || REDEPLOY_RESTART=":"
+  if tmux has-session -t "${QUEUE_SESSION:-tcpuxdo-queue}" 2>/dev/null && [ -f setup/relay-restart.sh ]; then
+    REDEPLOY_RESTART="bash setup/relay-restart.sh"
+  elif tmux has-session -t "${WORKER_SESSION:-tcpuxdo-worker}" 2>/dev/null && [ -f setup/worker-restart.sh ]; then
+    REDEPLOY_RESTART="bash setup/worker-restart.sh"
+  else
+    REDEPLOY_RESTART=":"
+  fi
 fi
 cli="$(basename "$ROOT")"   # repo dir name == CLI name for credpipe & tcpuxdo
 if [ -z "${REDEPLOY_HEALTH:-}" ]; then
