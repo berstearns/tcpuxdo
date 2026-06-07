@@ -27,6 +27,7 @@ SESSION="${WORKER_SESSION:-tcpuxdo-worker}"
 WINDOW="${WORKER_WINDOW:-worker}"
 P_MAIN="${WORKER_PANE_MAIN:-tcpuxdo-worker-main}"
 P_OBS="${WORKER_PANE_OBS:-tcpuxdo-worker-obs}"
+P_CTL="${WORKER_PANE_CTL:-tcpuxdo-worker-ctl}"
 SHELL_NAMES='^(bash|zsh|fish|sh|dash|tcsh|ksh)$'
 say() { printf '  %s\n' "$*"; }
 
@@ -62,8 +63,24 @@ else
     say "obs pane $P_OBS already exists"
 fi
 
+# ── ctl pane (idle shell — push-model redeploy target) ─────────
+# Stays at a bare prompt so it counts as IDLE: main can `tcpuxdo -w $NAME
+# -p $SESSION:$WINDOW:$P_CTL -c 'bash setup/redeploy-watch.sh'` to trigger an
+# instant redeploy WITHOUT typing into the busy worker pane (which the idle-gate
+# would reject). Steady-state redeploy is the systemd timer; this is the "now" button.
+if [[ "$(tmux list-panes -t "$SESSION:$WINDOW" -F '#{pane_title}' | grep -cx "$P_CTL" || true)" -eq 0 ]]; then
+    tmux split-window -t "$SESSION:$WINDOW" -c "$ROOT"
+    idx=$(tmux list-panes -t "$SESSION:$WINDOW" -F '#{pane_index}' | tail -1)
+    tmux select-pane -t "$SESSION:$WINDOW.$idx" -T "$P_CTL"
+    tmux select-layout -t "$SESSION:$WINDOW" tiled >/dev/null 2>&1 || true
+    say "created idle control pane $P_CTL (push-model redeploy target)"
+else
+    say "control pane $P_CTL already exists"
+fi
+
 echo
 echo "worker '$NAME' @ $SESSION:$WINDOW  → relay $HOST:$PORT"
+echo "instant redeploy from main:  tcpuxdo -w $NAME -p $SESSION:$WINDOW:$P_CTL -c 'bash setup/redeploy-watch.sh'"
 echo "from main, allow this node's egress IP then address it:"
 echo "  tcpuxdo allow \$(curl -s ifconfig.me)     # run anywhere with the admin token"
 echo "  tcpuxdo list $NAME"

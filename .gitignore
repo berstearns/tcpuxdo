@@ -19,3 +19,6 @@ __pycache__/
 *.pyo
 .venv/
 .DS_Store
+
+# per-node redeploy audit trail (runtime)
+.redeploy-ledger

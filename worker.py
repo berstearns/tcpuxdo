@@ -37,6 +37,28 @@ IDLE_CMDS = set(filter(None, os.environ.get(
 ).split(",")))
 
 
+# ── git provenance ──────────────────────────────────────────────
+
+def git_meta():
+    """Git SHA/branch of the repo this worker is running FROM, captured once at
+    startup — so it reflects the code actually loaded into this process (a
+    pull-without-restart shows as 'behind' until the worker is restarted, which
+    is exactly what the redeploy flow does). Reported with each panes-update so
+    the fleet dashboard can flag commit drift."""
+    root = os.path.dirname(os.path.abspath(__file__))
+    def g(*a):
+        try:
+            return subprocess.run(("git", "-C", root) + a,
+                                  capture_output=True, text=True, timeout=3).stdout.strip()
+        except Exception:
+            return ""
+    return {
+        "sha":    g("rev-parse", "--short=8", "HEAD"),
+        "branch": g("rev-parse", "--abbrev-ref", "HEAD"),
+        "dirty":  bool(g("status", "--porcelain")),
+    }
+
+
 # ── tmux wrappers ───────────────────────────────────────────────
 
 def _tmux(*args, check=True):
@@ -73,7 +95,26 @@ def list_panes():
 def tmux_send_keys(pane_id, cmd):
     s, w, p = pane_id.split(":", 2)
     target = f"{s}:{w}.{p}"
-    _tmux("send-keys", "-t", target, cmd, "Enter")
+    # Send the prompt text and the submitting Enter as TWO keystrokes, not one.
+    # Claude Code (and other Ink / bracketed-paste TUIs) treat a newline that
+    # arrives fused with pasted text as a literal newline in the input box — so a
+    # single `send-keys <text> Enter` types the prompt but never submits it.
+    # `-l` sends the text literally; a short settle lets the TUI leave paste-mode;
+    # then a standalone Enter registers as a real Return. Shells are unaffected.
+    _tmux("send-keys", "-t", target, "-l", cmd)
+    time.sleep(0.3)
+    _tmux("send-keys", "-t", target, "Enter")
+
+
+def tmux_capture_pane(pane_id, lines=None):
+    """Return the pane's visible text (or last `lines` of scrollback) via
+    `tmux capture-pane -p`. `-S -N` extends the start N lines up the history."""
+    s, w, p = pane_id.split(":", 2)
+    target = f"{s}:{w}.{p}"
+    args = ["capture-pane", "-p", "-t", target]
+    if lines:
+        args += ["-S", f"-{int(lines)}"]
+    return _tmux(*args).stdout
 
 
 def tmux_new_session(session):
@@ -106,6 +147,17 @@ def run_send_keys(pane_id, cmd):
     return {"ok": True, "pane": pane_id}
 
 
+def run_capture_pane(pane_id, lines=None):
+    # No busy gate: reading a busy pane's output is the whole point.
+    if pane_id not in list_panes():
+        return {"ok": False, "err": "pane vanished"}
+    try:
+        text = tmux_capture_pane(pane_id, lines)
+    except Exception as e:
+        return {"ok": False, "err": str(e)}
+    return {"ok": True, "pane": pane_id, "text": text}
+
+
 def run_create_session(session):
     try:
         tmux_new_session(session)
@@ -135,6 +187,7 @@ def run_create_pane(pane_id):
 
 HANDLERS = {
     "send-keys":      lambda c: run_send_keys(c["pane"], c["cmd"]),
+    "capture-pane":   lambda c: run_capture_pane(c["pane"], c.get("lines")),
     "create-session": lambda c: run_create_session(c["session"]),
     "create-window":  lambda c: run_create_window(c["session"], c["window"]),
     "create-pane":    lambda c: run_create_pane(c["pane"]),
@@ -155,8 +208,10 @@ def main():
     if args.port is None:
         ap.error("--port required (or set TCPUX_PORT in env)")
 
+    meta = git_meta()
     print(f"tcpux-worker '{args.name}' → {args.host}:{args.port} "
-          f"(poll={args.poll}s sync={args.sync}s)", flush=True)
+          f"(poll={args.poll}s sync={args.sync}s) "
+          f"[{meta['branch']}@{meta['sha']}{'*' if meta['dirty'] else ''}]", flush=True)
 
     last_sync = 0.0
     while True:
@@ -165,7 +220,7 @@ def main():
             if now - last_sync >= args.sync:
                 panes = list_panes()
                 resp = rpc(args.host, args.port,
-                           {"op": "tmux-panes-update", "worker": args.name, "panes": panes})
+                           {"op": "tmux-panes-update", "worker": args.name, "panes": panes, "meta": meta})
                 if not resp.get("ok"):
                     print(f"  update rejected: {resp}", flush=True)
                 else:

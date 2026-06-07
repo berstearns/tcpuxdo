@@ -84,6 +84,26 @@ def check_send_keys(state, worker_id, pane_id, cmd):
     return OK
 
 
+# ── CAP: capture-pane (client → server, queued for worker) ──────
+# Like send-keys it targets an existing pane, but it READS rather than
+# writes, so there is no busy/idle gate — capturing a busy pane's output
+# is the whole point. Same SK3-style "pane must exist" safety net.
+
+def check_capture_pane(state, worker_id, pane_id):
+    if not isinstance(worker_id, str) or not IDENT_RE.match(worker_id):
+        return _fail("CAP1_BAD_WORKER_ID", "worker_id must match [A-Za-z0-9_-]+")
+    if worker_id not in state:
+        return _fail("CAP1_WORKER_UNKNOWN",
+                     "worker has not sent tmux-panes-update yet")
+    if not isinstance(pane_id, str) or not PANE_ID_RE.match(pane_id):
+        return _fail("CAP2_BAD_PANE_ID", "pane must match session:window:pane")
+    panes = state[worker_id].get("panes", {})
+    if pane_id not in panes:
+        return _fail("CAP3_PANE_NOT_EXIST",
+                     f"pane {pane_id} not in worker's current pane set")
+    return OK
+
+
 # ── CS: create-session ──────────────────────────────────────────
 
 def check_create_session(state, worker_id, session):

@@ -128,6 +128,29 @@ def send_keys(host, port, worker, pane, cmd, cascade, wait):
     return r
 
 
+def capture_pane(host, port, target, lines, wait):
+    """Submit a capture-pane op and poll `status` until the worker acks the
+    text back. `target` is a dict carrying either {shortcut} or {worker,pane}.
+    Returns the worker's result dict (with "text" on success)."""
+    submit = {"op": "capture-pane", **target}
+    if lines:
+        submit["lines"] = lines
+    r = rpc(host, port, submit)
+    if not r.get("ok"):
+        return r
+    cid = r["id"]
+    print(f"capture-pane queued #{cid}; waiting up to {wait:.0f}s…", file=sys.stderr)
+    deadline = time.time() + wait
+    while time.time() < deadline:
+        st = rpc(host, port, {"op": "status", "id": cid})
+        result = st.get("result")
+        if result is not None:
+            return result
+        time.sleep(0.5)
+    return {"ok": False, "err_code": "TIMEOUT",
+            "hint": f"worker did not ack capture #{cid} within {wait:.0f}s"}
+
+
 def main():
     ap = argparse.ArgumentParser(description="tcpux client")
     ap.add_argument("-w", "--worker", help="target worker id (or use -s)")
@@ -143,10 +166,13 @@ def main():
                     help="disable auto-cascade to create-pane on SK3 rejection")
     ap.add_argument("--wait",  type=float, default=30.0,
                     help="seconds to wait for created panes to appear")
-    ap.add_argument("--op",    choices=["send-keys", "create-pane", "create-window",
-                                         "create-session", "state", "status",
-                                         "shortcut-set", "shortcut-del", "shortcut-list"],
+    ap.add_argument("--op",    choices=["send-keys", "capture-pane", "create-pane",
+                                         "create-window", "create-session", "state",
+                                         "status", "shortcut-set", "shortcut-del",
+                                         "shortcut-list"],
                     default="send-keys")
+    ap.add_argument("--lines", type=int,
+                    help="capture-pane: lines of scrollback to include (default: visible pane)")
     ap.add_argument("--session", help="session id for create-session / create-window")
     ap.add_argument("--window",  help="window id for create-window")
     ap.add_argument("--id",      type=int, help="command id for --op status")
@@ -174,6 +200,21 @@ def main():
                 ap.error("--worker and --pane (or --shortcut) required for send-keys")
             r = send_keys(args.host, args.port, args.worker, args.pane, args.cmd,
                           cascade=not args.no_cascade, wait=args.wait)
+    elif args.op == "capture-pane":
+        if args.shortcut:
+            target = {"shortcut": args.shortcut}
+        elif args.worker and args.pane:
+            target = {"worker": args.worker, "pane": args.pane}
+        else:
+            ap.error("--worker and --pane (or --shortcut) required for capture-pane")
+        result = capture_pane(args.host, args.port, target, args.lines, args.wait)
+        if result.get("ok"):
+            # The captured text IS the payload — write it raw to stdout so it
+            # pipes/redirects cleanly. Diagnostics already went to stderr.
+            sys.stdout.write(result.get("text", ""))
+            sys.exit(0)
+        print(json.dumps(result, indent=2, default=str), file=sys.stderr)
+        sys.exit(1)
     elif args.op == "create-pane":
         r = rpc(args.host, args.port,
                 {"op": "create-pane", "worker": args.worker, "pane": args.pane})

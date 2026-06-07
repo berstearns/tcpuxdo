@@ -94,7 +94,7 @@ C = {
 OP_COLORS = {
     "tmux-panes-update": "blue", "send-keys": "green", "poll": "cyan",
     "ack": "magenta", "create-session": "yellow", "create-window": "yellow",
-    "create-pane": "yellow", "state": "dim",
+    "create-pane": "yellow", "state": "dim", "capture-pane": "green",
     "shortcut-set": "magenta", "shortcut-del": "magenta", "shortcut-list": "dim",
 }
 
@@ -193,6 +193,11 @@ def _op_panes_update(msg, addr):
         merged[pid] = base
     rec["panes"] = merged
     rec["last_update"] = time.time()
+    # git provenance the worker reports about the code it's actually running
+    # (captured at the worker's startup). Lets the dashboard answer "is the
+    # fleet converged on the same commit / on origin?". Optional, back-compat.
+    if msg.get("meta") is not None:
+        rec["meta"] = msg["meta"]
     log("INF", op, f"worker {C['bold']}{worker_id}{C['reset']} "
                    f"panes={C['cyan']}{len(merged)}{C['reset']}", addr)
     return {"ok": True, "panes_seen": len(merged)}
@@ -218,6 +223,22 @@ def _op_send_keys(msg, addr):
     log("INF", op, f"{C['bold']}#{c['id']}{C['reset']} → "
                    f"{C['cyan']}{worker_id}{C['reset']}/{pane_id}{via} "
                    f"{C['dim']}{cmd[:50]}{C['reset']}", addr)
+    return {"ok": True, "id": c["id"]}
+
+
+def _op_capture_pane(msg, addr):
+    op = "capture-pane"
+    _shortcuts_load()
+    # Same target resolution as send-keys: exactly one of {pane, shortcut}.
+    worker_id, pane_id, (rok, rcode, rhint) = axioms.resolve_send_keys_target(SHORTCUTS, msg)
+    if not rok:
+        return _reject(rcode, rhint, op, addr)
+    ok, code, hint = axioms.check_capture_pane(STATE, worker_id, pane_id)
+    if not ok: return _reject(code, hint, op, addr)
+    via = f" {C['dim']}(via {msg.get('shortcut')!r}){C['reset']}" if msg.get("shortcut") else ""
+    c = _enqueue(worker_id, op, pane=pane_id, lines=msg.get("lines"))
+    log("INF", op, f"{C['bold']}#{c['id']}{C['reset']} → "
+                   f"{C['cyan']}{worker_id}{C['reset']}/{pane_id}{via}", addr)
     return {"ok": True, "id": c["id"]}
 
 
@@ -333,6 +354,7 @@ def _op_shortcut_list(msg, addr):
 OPS = {
     "tmux-panes-update": _op_panes_update,
     "send-keys":         _op_send_keys,
+    "capture-pane":      _op_capture_pane,
     "create-session":    _op_create_session,
     "create-window":     _op_create_window,
     "create-pane":       _op_create_pane,

@@ -75,6 +75,8 @@ tcpuxdo list                                  # all nodes + panes
 tcpuxdo -w nodeA -p work:1:1 -c 'git pull'    # send-keys to a pane
 tcpuxdo shortcut set claude-main -w nodeA -p work:1:1
 tcpuxdo -s claude-main -c '/compact'          # send to the Claude pane by name
+tcpuxdo read -s claude-main                    # capture that pane's text back (stdout)
+tcpuxdo read -s claude-main --lines 200        # include 200 lines of scrollback
 ```
 
 > Pane indices are 1-based (`pane-base-index=1`), so the first pane is `.1`.

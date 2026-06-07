@@ -50,6 +50,22 @@ the canonical `PANE_ID`, so presence is a single dictionary lookup.
 
 Effect on success: `QUEUE[worker_id] ← QUEUE[worker_id] · ⟨send-keys pane cmd⟩`.
 
+### CAP — `capture-pane` (client → server → queue → ack with text)
+
+Reads a pane's text back. Same target resolution as `send-keys` (exactly one
+of `{pane, shortcut}`), but **no SK5 busy gate** — capturing a busy pane's
+output is the whole point.
+
+| # | axiom | err_code |
+|---|---|---|
+| CAP1 | `worker_id ∈ IDENT` and registered | `CAP1_BAD_WORKER_ID` / `CAP1_WORKER_UNKNOWN` |
+| CAP2 | `pane_id ∈ PANE_ID` (grammar) | `CAP2_BAD_PANE_ID` |
+| CAP3 | `pane_id ∈ dom(STATE[worker_id].panes)` | `CAP3_PANE_NOT_EXIST` |
+
+Effect on success: `QUEUE[worker_id] ← QUEUE[worker_id] · ⟨capture-pane pane lines⟩`.
+The worker runs `tmux capture-pane -p` (optionally `-S -lines`) and acks the
+text into `DISPATCHED[id].result.text`; the client polls `status` to read it.
+
 ### CS — `create-session`
 
 | # | axiom | err_code |
