@@ -51,7 +51,18 @@ ENV_FILE="$HERE/.env"
 [[ -f "$ENV_FILE" ]] || { echo "missing $ENV_FILE — cp .env.example .env and fill it in"; exit 1; }
 set -o allexport; . "$ENV_FILE"; set +o allexport
 
-STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo"
+# One target file per messenger GROUP, not one per machine.
+#
+# Keying this by (machine) alone is the defect that forced the shared-target-owner
+# fence: N messenger instances on m1 shared ONE mutable target file, so any
+# `tcx.sh use` could silently redirect another instance's in-flight send — the
+# 2026-07-21 incidents #1/#2 (res-messenger -> claude4:0:0, four times, undetected).
+# The fence was a procedural workaround for a missing key dimension. Adding the
+# dimension retires the workaround: with TCX_GROUP set, two instances cannot
+# collide because they no longer share the file.
+#
+# TCX_GROUP unset => byte-identical behaviour to before (the human's own TUI).
+STATE_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo${TCX_GROUP:+/$TCX_GROUP}"
 TARGET_FILE="$STATE_DIR/target"      # one line: "worker<TAB>pane"
 HIST_FILE="$STATE_DIR/history"       # one prompt per line
 ALIAS_FILE="$STATE_DIR/aliases"      # "name<TAB>worker<TAB>pane" per line
