@@ -39,8 +39,10 @@
 #          remote: create-session / create-pane / send-keys on ONE worker,
 #                  plus a `tcpuxdo shortcut set claude-main` naming that pane.
 #          local:  a tmux session <name>-cockpit with two TITLED panes.
-#          No file is written: aiming the shared target file at the new pane
-#                  is the NEXT commit, deliberately kept separate.
+#          writes: ${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/target
+#                  (the SHARED target file, format "worker<TAB>pane", exactly
+#                  the format tcx.sh writes — see save_target there). Only the
+#                  remote half writes it; --no-remote never touches it.
 #          exit 0 ok · 1 runtime failure · 2 bad input (unknown worker, …)
 #          · 3 relay unreachable (CANNOT TELL) · 64 usage error.
 #
@@ -142,6 +144,11 @@ TEARDOWN=0
 # Local pane titles. Fixed, because the selfcheck and docs both name them.
 SEND_TITLE="tcx-send"
 STREAM_TITLE="tcx-stream"
+
+# The SHARED target file. Deliberately NOT namespaced by TCX_GROUP: this is the
+# file setup/tcx-stream.sh reads (it hardcodes the ungrouped path), so writing a
+# grouped one would leave the stream pane showing "no target set" forever.
+TARGET_FILE="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/target"
 
 # ── output ──────────────────────────────────────────────────────────────────
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -487,6 +494,26 @@ remote_half() {
   $TCPUXDO list $w" 1
     fi
 
+    save_target "$w" "$pane"
+}
+
+# The target file, written in EXACTLY the format tcx.sh's save_target writes:
+# one line, "worker<TAB>pane". tcx-stream.sh and tcx-cli both read this file;
+# inventing a second format here would silently break both.
+save_target() {  # $1 worker  $2 pane
+    local prev=""
+    [[ -s "$TARGET_FILE" ]] && prev="$(tr '\t' ' ' < "$TARGET_FILE" | tr -d '\n')"
+    if (( DRY )); then
+        printf '  %sDRY%s would write %s <- %s\t%s\n' "$Y" "$X" "$TARGET_FILE" "$1" "$2" >&2
+        return 0
+    fi
+    mkdir -p "$(dirname "$TARGET_FILE")"
+    printf '%s\t%s\n' "$1" "$2" > "$TARGET_FILE"
+    # The target file is SHARED (tcx.sh, tcx-cli, tcx-stream.sh all read it).
+    # Overwriting it silently is the 2026-07-21 redirect incident; print the old
+    # value so it is one copy-paste to put back.
+    [[ -n "$prev" ]] && note "target was: $prev  (restore with: tcx-cli to $prev)"
+    step "target: $1 $2  ->  $TARGET_FILE"
 }
 
 # ============================================================================
