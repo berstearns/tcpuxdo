@@ -207,6 +207,21 @@ if (( ! cockpit_ok )); then
     fail cockpit "AUTO-tcx-cockpit.sh failed against worker $WNAME"
 fi
 
+# Two independent capture paths (defined here: step 6's diagnosis needs them):
+#   relay:     tcx.sh read — the real m1 path; retried over spurious timeouts.
+#   container: scan EVERY tmux socket, as the worker itself does.
+cap_container() {
+    docker exec "$CONTAINER" su - b -c '
+        for s in /tmp/tmux-$(id -u)/*; do
+            if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
+                printf "%s\n" "$out"; exit 0
+            fi
+        done
+        echo "E2E_NO_SOCKET_HAD_SESSION"; exit 1'
+}
+cap_relay() { TCX_READ_WAIT=25 "$ROOT/tcx.sh" read 200 2>/dev/null; }
+seen_reply() { grep -F "$SENTINEL" | grep -cv "Reply with exactly" ; }
+
 step "6. sentinel through the relay"
 if (( ! DRY )); then
     TARGET_LINE="$("$COCKPIT" --print-target)" || fail target "cockpit saved no target"
@@ -215,18 +230,34 @@ if (( ! DRY )); then
     # Keys sent into a still-starting TUI are silently dropped (STRICT A4), so
     # do not sleep-and-hope: wait until the registry reports the pane's command
     # IS claude. First start on a cold container takes well over a minute.
-    t=0
-    until "$ROOT/tcpuxdo" --op state 2>/dev/null \
-          | jq -e --arg w "$WNAME" --arg p "$T_PANE" \
-               '.state[$w].panes[$p].cmd == "claude"' >/dev/null; do
-        (( t >= 300 )) && {
-            note "diagnosis — pane cmd right now:"
-            "$ROOT/tcpuxdo" --op state 2>/dev/null \
-                | jq -r --arg w "$WNAME" --arg p "$T_PANE" '.state[$w].panes[$p]' >&2
-            fail claude-start "pane $T_PANE never reported cmd=claude within 5m"
-        }
-        sleep 10; t=$((t+10))
+    # Keys typed into a shell that is still initialising are dropped SILENTLY
+    # (STRICT A4) — observed: the identical launch lands on one run and
+    # vanishes on the next. So the launch is re-typed in rounds: wait ~100s
+    # for cmd=claude, and if it never flips, run the cockpit again — its
+    # already-running guard makes the re-send a no-op once claude is up.
+    claude_up=0
+    for round in 1 2 3; do
+        t=0
+        while (( t < 100 )); do
+            if "$ROOT/tcpuxdo" --op state 2>/dev/null \
+               | jq -e --arg w "$WNAME" --arg p "$T_PANE" \
+                    '.state[$w].panes[$p].cmd == "claude"' >/dev/null; then
+                claude_up=1; break 2
+            fi
+            sleep 10; t=$((t+10))
+        done
+        note "round $round: pane still not claude — re-typing the launch (idempotent)"
+        run env NO_COLOR=1 TCX_COCKPIT_WAIT=120 "$COCKPIT" --tty --no-local \
+            -w "$WNAME" -s "$RSESS" -d '~' || note "re-send attempt failed; next round"
     done
+    if (( ! claude_up )); then
+        note "diagnosis — pane cmd right now:"
+        "$ROOT/tcpuxdo" --op state 2>/dev/null \
+            | jq -r --arg w "$WNAME" --arg p "$T_PANE" '.state[$w].panes[$p]' >&2
+        note "diagnosis — pane content (in-container, all sockets):"
+        cap_container | tail -20 | sed 's/^/e2e:   /' >&2
+        fail claude-start "pane $T_PANE never reported cmd=claude after 3 launch rounds"
+    fi
     note "pane $T_PANE reports cmd=claude — safe to type"
     sleep 5   # let the TUI finish drawing after the process appears
     run "$ROOT/tcx.sh" send "Reply with exactly: $SENTINEL" \
@@ -240,24 +271,6 @@ if (( DRY )); then
     # line that lies (STRICT rule 11). The verdict is explicit non-proof.
     printf 'DRY-RUN-ONLY\n'; exit 0
 fi
-# Two independent proof paths, per the handoff ("via capture-pane OR reading
-# the pane inside the container"):
-#   relay:     tcx.sh read — the real m1 path; retried, because capture-pane
-#              is documented to time out spuriously.
-#   container: scan EVERY tmux socket — the worker enumerates sockets too, so
-#              the session may live on a non-default server.
-cap_container() {
-    docker exec "$CONTAINER" su - b -c '
-        for s in /tmp/tmux-$(id -u)/*; do
-            if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
-                printf "%s\n" "$out"; exit 0
-            fi
-        done
-        echo "E2E_NO_SOCKET_HAD_SESSION"; exit 1'
-}
-cap_relay() { TCX_READ_WAIT=25 "$ROOT/tcx.sh" read 200 2>/dev/null; }
-seen_reply() { grep -F "$SENTINEL" | grep -cv "Reply with exactly" ; }
-
 t=0; got=""; last_container_cap=""
 while (( t < 300 )); do
     got="$(cap_relay | seen_reply || true)"
