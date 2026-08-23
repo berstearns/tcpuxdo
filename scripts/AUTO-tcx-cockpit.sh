@@ -2,8 +2,9 @@
 #===============================================================================
 # WHAT:    AUTO-tcx-cockpit.sh — the stage-2 cockpit CLI so far: the option
 #          surface, the dry-run preview machinery, and a preflight that reads
-#          LIVE relay state to validate the worker. It resolves and CHECKS its
-#          inputs, then prints the plan. It builds nothing yet.
+#          LIVE relay state to validate the worker, and rofi prompts (or a named
+#          profile) for whatever the CLI did not supply. It resolves and CHECKS
+#          its inputs, then prints the plan. It builds nothing yet.
 #
 # WHY:     The two halves this will grow (a remote Claude pane, a local two-pane
 #          cockpit) both hang off one argument surface and one preview
@@ -16,12 +17,14 @@
 # INPUTS:  -w, --worker NAME    target worker
 #          -s, --session NAME   remote session name; local becomes <name>-cockpit
 #          -d, --dir PATH       remote working directory for claude
+#          -p, --profile NAME   named preset from the profiles file
 #          -n, --dry-run        print every command, run NOTHING
 #              --no-color       disable ANSI
 #          -h, --help
 #
 #          Env overrides: TCX_COCKPIT_WORKER, TCX_COCKPIT_SESSION,
-#          TCX_COCKPIT_DIR, TCX_COCKPIT_DEAD_SECS, TCX_COCKPIT_HOST,
+#          TCX_COCKPIT_DIR, TCX_COCKPIT_PROFILE, TCX_COCKPIT_PROFILES_FILE,
+#          TCX_COCKPIT_ROFI_LINES, TCX_COCKPIT_DEAD_SECS, TCX_COCKPIT_HOST,
 #          TCX_COCKPIT_PORT.
 #
 # OUTPUTS / SIDE EFFECTS:
@@ -35,14 +38,18 @@
 #       # resolve the three inputs and print the plan
 #   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
 #       # the same, in dry-run mode
+#   AUTO-tcx-cockpit.sh
+#       # rofi asks for worker (from LIVE state), session and dir
+#   AUTO-tcx-cockpit.sh -p ferret
+#       # the same three inputs, from a saved profile
 #   AUTO-tcx-cockpit.sh -w no-such-worker -s ferret -d '~'
 #       # INVALID: unknown worker, exit 2, with the live worker list
 #   AUTO-tcx-cockpit.sh --nonsense
 #       # INVALID: unknown option, exit 64
 #
-# NOT IN THIS COMMIT, on purpose: the rofi prompts, the remote session, and the
-#          local cockpit. Each lands as its own rung so it can be reverted
-#          without taking the option surface or the validation with it.
+# NOT IN THIS COMMIT, on purpose: the remote session and the local cockpit.
+#          Each lands as its own rung so it can be reverted without taking the
+#          option surface, the validation, or the prompts with it.
 #
 # RE-RUN SAFETY: read-only and idempotent — there is nothing here to mutate yet.
 #===============================================================================
@@ -62,6 +69,9 @@ declare -A CONFIG=(
     [worker]="${TCX_COCKPIT_WORKER:-}"
     [session]="${TCX_COCKPIT_SESSION:-}"
     [dir]="${TCX_COCKPIT_DIR:-}"
+    [profile]="${TCX_COCKPIT_PROFILE:-}"
+    [profiles_file]="${TCX_COCKPIT_PROFILES_FILE:-$HOME/.config/tcx-cockpit/profiles.conf}"
+    [rofi_lines]="${TCX_COCKPIT_ROFI_LINES:-12}"
     # A worker silent longer than this is treated as DEAD: submitting to it
     # queues an op nobody will ever run, which looks exactly like success.
     [dead_secs]="${TCX_COCKPIT_DEAD_SECS:-180}"
@@ -121,6 +131,8 @@ parse_args() {
                            CONFIG[session]="$2"; shift 2 ;;
             -d|--dir)      [[ $# -ge 2 ]] || die E_USAGE "-d needs a value" 64
                            CONFIG[dir]="$2"; shift 2 ;;
+            -p|--profile)  [[ $# -ge 2 ]] || die E_USAGE "-p needs a value" 64
+                           CONFIG[profile]="$2"; shift 2 ;;
             -n|--dry-run)  DRY=1; shift ;;
             --no-color)    B=""; D=""; X=""; G=""; Y=""; R=""; C=""; shift ;;
             *)             die E_USAGE "unknown option '$1' — try --help" 64 ;;
@@ -139,9 +151,17 @@ Options:
   -w, --worker NAME     target worker
   -s, --session NAME    remote session name; local is <NAME>-cockpit
   -d, --dir PATH        remote working directory for claude
+  -p, --profile NAME    named preset from ${CONFIG[profiles_file]}
   -n, --dry-run         print every command, run nothing
       --no-color        disable ANSI
   -h, --help            this text
+
+Anything not given on the CLI is asked for with rofi. The worker list always
+comes from LIVE relay state (tcpuxdo --op state), never a hardcoded list.
+
+Profiles file (${CONFIG[profiles_file]}), one per line:
+  # name:worker:session:dir
+  ferret:newlaptop:ferret:~/p/ferret
 
 Exit codes:
   0 ok · 1 runtime failure · 2 bad input · 3 relay unreachable · 64 usage
@@ -149,6 +169,7 @@ Exit codes:
 Examples:
   AUTO-tcx-cockpit.sh -w newlaptop -s ferret -d '~/p/ferret'
   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
+  AUTO-tcx-cockpit.sh -p ferret
 EOF
 }
 
@@ -183,6 +204,26 @@ run_capture() {
 }
 
 # ============================================================================
+# Profiles — named presets so an i3 binding stays declarative
+# ============================================================================
+apply_profile() {
+    local name="${CONFIG[profile]}"
+    [[ -z "$name" ]] && return 0
+    local file="${CONFIG[profiles_file]}"
+    [[ -r "$file" ]] || die E_NO_PROFILES "profiles file not readable: $file" 2
+    local line
+    line="$(grep -v '^[[:space:]]*#' "$file" | grep -m1 "^${name}:")" \
+        || die E_NO_PROFILE "no profile '$name' in $file" 2
+    local p_worker p_session p_dir
+    IFS=':' read -r _ p_worker p_session p_dir <<<"$line"
+    # CLI beats profile: a flag the human typed is never overwritten by a file.
+    [[ -z "${CONFIG[worker]}"  && -n "${p_worker:-}"  ]] && CONFIG[worker]="$p_worker"
+    [[ -z "${CONFIG[session]}" && -n "${p_session:-}" ]] && CONFIG[session]="$p_session"
+    [[ -z "${CONFIG[dir]}"     && -n "${p_dir:-}"     ]] && CONFIG[dir]="$p_dir"
+    return 0
+}
+
+# ============================================================================
 # Preflight — a missing dependency must be named, never discovered halfway
 # through by a cryptic error from a half-built session.
 # ============================================================================
@@ -192,6 +233,13 @@ preflight() {
         command -v "$c" >/dev/null || die E_MISSING_DEP "'$c' not on PATH — install it" 1
     done
     [[ -x "$TCPUXDO" ]] || die E_MISSING_DEP "tcpuxdo not executable at $TCPUXDO" 1
+    # rofi is only load-bearing when something still has to be asked for. It is
+    # checked here (named, once) rather than at the prompt, where a missing
+    # binary would look like the prompt being cancelled.
+    if [[ -z "${CONFIG[worker]}" || -z "${CONFIG[session]}" || -z "${CONFIG[dir]}" ]]; then
+        command -v rofi >/dev/null || die E_MISSING_DEP \
+            "rofi not on PATH and an input is missing — pass -w/-s/-d explicitly" 1
+    fi
 }
 
 # ============================================================================
@@ -227,6 +275,40 @@ worker_age_secs() {  # seconds since the worker last reported, or "" if never
         | awk -v now="$(date +%s)" '{ printf "%d\n", ($1 > 0 ? now - $1 : -1) }'
 }
 
+# ============================================================================
+# Input collection — rofi, but only for what is still missing. Kept inline
+# (~30 lines) rather than split into AUTO-tcx-cockpit-rofi.sh: a second file
+# that is only ever called from one place earns nothing.
+# ============================================================================
+rofi_pick() {  # $1 prompt  $2.. options ; stdin is closed so a piped caller
+               # can never make rofi read the pipe (constraint: </dev/null)
+    printf '%s\n' "${@:2}" | rofi -dmenu -i -p "$1" -lines "${CONFIG[rofi_lines]}" </dev/null
+}
+
+rofi_ask() {  # $1 prompt  $2 default ; free text
+    printf '%s\n' "$2" | rofi -dmenu -i -p "$1" -lines 1 </dev/null
+}
+
+collect_inputs() {
+    if [[ -z "${CONFIG[worker]}" ]]; then
+        require_state
+        local -a workers=()
+        mapfile -t workers < <(worker_list)
+        (( ${#workers[@]} )) || die E_NO_WORKERS \
+            "no worker has ever registered with the relay — bring one up with setup/node-up.sh" 2
+        CONFIG[worker]="$(rofi_pick "worker" "${workers[@]}")"
+        [[ -n "${CONFIG[worker]}" ]] || die E_CANCELLED "no worker chosen" 2
+    fi
+    if [[ -z "${CONFIG[session]}" ]]; then
+        CONFIG[session]="$(rofi_ask "remote session name" "claude")"
+        [[ -n "${CONFIG[session]}" ]] || die E_CANCELLED "no session name given" 2
+    fi
+    if [[ -z "${CONFIG[dir]}" ]]; then
+        CONFIG[dir]="$(rofi_ask "remote working dir" "~")"
+        [[ -n "${CONFIG[dir]}" ]] || die E_CANCELLED "no working directory given" 2
+    fi
+}
+
 # tcpux's IDENT grammar is [A-Za-z0-9_-]+. A session name outside it is
 # rejected by the CS1 axiom on the relay; catching it here names the reason.
 validate_session_name() {
@@ -258,11 +340,12 @@ validate_worker() {
 # ============================================================================
 main() {
     parse_args "$@"
+    apply_profile
     build_relay_flags
     preflight
-
-    [[ -n "${CONFIG[session]}" ]] && validate_session_name
-    [[ -n "${CONFIG[worker]}"  ]] && validate_worker
+    collect_inputs
+    validate_session_name
+    validate_worker
 
     printf '\n%s── cockpit ──%s\n' "$B" "$X"
     printf '  %sworker%s          %s\n' "$D" "$X" "${CONFIG[worker]:-(unset)}"
