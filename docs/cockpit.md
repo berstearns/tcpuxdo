@@ -7,8 +7,11 @@ box" into one command:
 scripts/AUTO-tcx-cockpit.sh -w <worker> -s <name> -d '<remote dir>'
 ```
 
-and with no flags at all it asks for those three things with rofi, the worker
-list coming from **live relay state** (`tcpuxdo --op state`, parsed with `jq`).
+and with no flags at all it asks for those three things — with **rofi** when
+`$DISPLAY` is set and rofi is on PATH, with plain **tty prompts** otherwise
+(`--tty` forces the tty mode; answers can be piped on stdin, e.g.
+`printf 'newlaptop\nferret\n~/p/ferret\n' | AUTO-tcx-cockpit.sh --tty`). The
+worker list comes from **live relay state** (`tcpuxdo --op state`, `jq`).
 
 What you end up with:
 

@@ -27,7 +27,13 @@
 #              --no-local       create only the remote session
 #              --rebuild        kill an existing local cockpit and rebuild it
 #              --teardown       kill the local cockpit and exit (remote is left)
+#              --tty            force plain tty prompts (never rofi)
 #          -h, --help
+#              --version
+#
+#          Input mode auto-detects: DISPLAY set + rofi on PATH -> rofi prompts;
+#          otherwise (or with --tty) plain read prompts, answers acceptable
+#          piped on stdin.
 #
 #          Env overrides (every CONFIG key): TCX_COCKPIT_WORKER,
 #          TCX_COCKPIT_SESSION, TCX_COCKPIT_DIR, TCX_COCKPIT_PROFILE,
@@ -140,6 +146,8 @@ DO_REMOTE=1
 DO_LOCAL=1
 REBUILD=0
 TEARDOWN=0
+FORCE_TTY=0
+VERSION="1.1.0"
 
 # Local pane titles. Fixed, because the selfcheck and docs both name them.
 SEND_TITLE="tcx-send"
@@ -187,6 +195,8 @@ parse_args() {
             --no-local)    DO_LOCAL=0; shift ;;
             --rebuild)     REBUILD=1; shift ;;
             --teardown)    TEARDOWN=1; shift ;;
+            --tty)         FORCE_TTY=1; shift ;;
+            --version)     printf 'AUTO-tcx-cockpit.sh %s\n' "$VERSION"; exit 0 ;;
             --no-color)    B=""; D=""; X=""; G=""; Y=""; R=""; C=""; shift ;;
             *)             die E_USAGE "unknown option '$1' — try --help" 64 ;;
         esac
@@ -210,11 +220,15 @@ Options:
       --no-local        only create the remote session
       --rebuild         kill an existing local cockpit and rebuild it
       --teardown        kill the local cockpit and exit (remote keeps running)
+      --tty             force plain tty prompts (never rofi)
       --no-color        disable ANSI
   -h, --help            this text
+      --version         print the version and exit
 
-Anything not given on the CLI is asked for with rofi. The worker list always
-comes from LIVE relay state (tcpuxdo --op state), never a hardcoded list.
+Anything not given on the CLI is asked for. Input mode auto-detects: rofi when
+\$DISPLAY is set and rofi is on PATH, plain read prompts otherwise (--tty
+forces the latter). The worker list always comes from LIVE relay state
+(tcpuxdo --op state), never a hardcoded list.
 
 Profiles file (${CONFIG[profiles_file]}), one per line:
   # name:worker:session:dir
@@ -302,13 +316,26 @@ preflight() {
     [[ -x "$TCX_CLI" || -r "$TCX_CLI" ]] \
         || die E_MISSING_DEP "tcx-cli not found (PATH, $REPO/tcx-cli, $HERE/AUTO-tcx-cli.sh)
   fix:  bash $HERE/AUTO-tcx-cli.sh install" 1
-    # rofi is only load-bearing when something still has to be asked for. It is
-    # checked here (named, once) rather than at the prompt, where a missing
-    # binary would look like the prompt being cancelled.
+    # rofi is only load-bearing when something still has to be asked for AND the
+    # rofi frontend was selected. It is checked here (named, once) rather than
+    # at the prompt, where a missing binary would look like a cancelled prompt.
+    # With no X display (or --tty) the fallback is plain read prompts, which
+    # need no dependency at all — see prompts_via_rofi / tty_pick / tty_ask.
     if [[ -z "${CONFIG[worker]}" || -z "${CONFIG[session]}" || -z "${CONFIG[dir]}" ]]; then
-        command -v rofi >/dev/null || die E_MISSING_DEP \
-            "rofi not on PATH and an input is missing — pass -w/-s/-d explicitly" 1
+        if prompts_via_rofi; then
+            :   # rofi confirmed present by prompts_via_rofi itself
+        elif [[ ! -t 0 && ! -p /dev/stdin && ! -f /dev/stdin ]]; then
+            die E_MISSING_DEP \
+                "an input is missing, no rofi frontend, and stdin is closed — pass -w/-s/-d explicitly (or pipe answers with --tty)" 1
+        fi
     fi
+}
+
+# Frontend decision, made in ONE place: rofi only under X, with rofi on PATH,
+# and not overridden by --tty. Everything else is a plain-tty prompt.
+prompts_via_rofi() {
+    (( FORCE_TTY )) && return 1
+    [[ -n "${DISPLAY:-}" ]] && command -v rofi >/dev/null
 }
 
 # ============================================================================
@@ -369,22 +396,50 @@ rofi_ask() {  # $1 prompt  $2 default ; free text
     printf '%s\n' "$2" | rofi -dmenu -i -p "$1" -lines 1 </dev/null
 }
 
+# Plain-tty twins of the rofi prompts. The menu goes to STDERR (stdout stays
+# data-only); the answer is read from STDIN, so a piped caller can supply the
+# answers non-interactively (`printf 'w\ns\n~\n' | … --tty`). EOF = cancelled.
+tty_pick() {  # $1 prompt  $2.. options ; a number picks, anything else is literal
+    local n=$(( $# - 1 )) i=1 opt reply
+    { printf '%s:\n' "$1"
+      for opt in "${@:2}"; do printf '  %d) %s\n' "$i" "$opt"; i=$((i+1)); done
+      printf '%s (number or name): ' "$1"; } >&2
+    IFS= read -r reply || return 1
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= n )); then
+        printf '%s\n' "${@:$((reply+1)):1}"
+    else
+        printf '%s\n' "$reply"
+    fi
+}
+
+tty_ask() {  # $1 prompt  $2 default
+    printf '%s [%s]: ' "$1" "$2" >&2
+    local reply
+    IFS= read -r reply || return 1
+    printf '%s\n' "${reply:-$2}"
+}
+
+ui_pick() { if prompts_via_rofi; then rofi_pick "$@"; else tty_pick "$@"; fi }
+ui_ask()  { if prompts_via_rofi; then rofi_ask  "$@"; else tty_ask  "$@"; fi }
+
 collect_inputs() {
-    if [[ -z "${CONFIG[worker]}" ]]; then
+    # The worker (like the dir) is only meaningful on the remote path; asking
+    # for it under --no-remote would dial the relay for an unused answer.
+    if [[ -z "${CONFIG[worker]}" && "$DO_REMOTE" == 1 ]]; then
         require_state
         local -a workers=()
         mapfile -t workers < <(worker_list)
         (( ${#workers[@]} )) || die E_NO_WORKERS \
             "no worker has ever registered with the relay — bring one up with setup/node-up.sh" 2
-        CONFIG[worker]="$(rofi_pick "worker" "${workers[@]}")"
+        CONFIG[worker]="$(ui_pick "worker" "${workers[@]}")"
         [[ -n "${CONFIG[worker]}" ]] || die E_CANCELLED "no worker chosen" 2
     fi
     if [[ -z "${CONFIG[session]}" ]]; then
-        CONFIG[session]="$(rofi_ask "remote session name" "claude")"
+        CONFIG[session]="$(ui_ask "remote session name" "claude")"
         [[ -n "${CONFIG[session]}" ]] || die E_CANCELLED "no session name given" 2
     fi
     if [[ -z "${CONFIG[dir]}" && "$DO_REMOTE" == 1 ]]; then
-        CONFIG[dir]="$(rofi_ask "remote working dir" "~")"
+        CONFIG[dir]="$(ui_ask "remote working dir" "~")"
         [[ -n "${CONFIG[dir]}" ]] || die E_CANCELLED "no working directory given" 2
     fi
 }

@@ -28,6 +28,7 @@
 #            local      --no-remote builds two TITLED panes, stream runs tcx-stream.sh
 #            idem       --no-remote twice: still exactly one session, two panes
 #            teardown   --teardown removes the session and leaves nothing behind
+#            tty        --tty collects piped stdin answers without rofi
 #            negative   every assertion above, deliberately broken, must go RED
 #            all        every mode above (negative included)
 #
@@ -101,7 +102,7 @@ mode_help() {
     [[ "$rc" == 0 ]] && ok "--help exits 0" || bad "--help exited $rc" "$out"
     local f missing=""
     for f in -w --worker -s --session -d --dir -p --profile -n --dry-run \
-             --no-remote --no-local -h --help; do
+             --no-remote --no-local --tty -h --help --version; do
         grep -qF -- "$f" <<<"$out" || missing="$missing $f"
     done
     [[ -z "$missing" ]] && ok "--help names every required flag" \
@@ -305,6 +306,41 @@ mode_teardown() {
 }
 
 #------------------------------------------------------------------------------
+# 8. tty mode: --tty with the answers piped on stdin collects WITHOUT rofi.
+#    DISPLAY is scrubbed so the rofi path is provably impossible; --dry-run so
+#    nothing is created; the piped session name must surface in the preview.
+#------------------------------------------------------------------------------
+mode_tty() {
+    head_ "tty — --tty collects piped inputs without rofi, creates nothing"
+    wipe
+    local out rc
+    out="$(printf 'ttyanswer\n' \
+           | env -u DISPLAY NO_COLOR=1 bash "$COCKPIT" --tty --no-remote -n -s "$SESS" 2>&1)"; rc=$?
+    [[ "$rc" == 0 ]] && ok "--tty piped run exits 0 (session given as flag)" \
+                     || bad "--tty piped run exited $rc" "$out"
+    # Now leave -s OUT: the session name must be COLLECTED from the pipe.
+    out="$(printf '%s\n' "$SESS" \
+           | env -u DISPLAY NO_COLOR=1 bash "$COCKPIT" --tty --no-remote -n 2>&1)"; rc=$?
+    if [[ "$rc" == 0 ]] && grep -qF -- "$SESS-cockpit" <<<"$out"; then
+        ok "--tty collected the session name from stdin (no rofi, DISPLAY unset)"
+    else
+        bad "--tty did not collect the piped session name" "rc=$rc $out"
+    fi
+    [[ "$(session_count)" == "0" ]] \
+        && ok "the tty dry run created nothing" \
+        || bad "the tty dry run created a session" "count=$(session_count)"
+    # Closed stdin (no answer possible) must be a NAMED refusal, never a hang.
+    # Preflight catches it before any prompt: E_MISSING_DEP naming the flags.
+    out="$(timeout 10 env -u DISPLAY NO_COLOR=1 \
+           bash "$COCKPIT" --tty --no-remote -n </dev/null 2>&1)"; rc=$?
+    if [[ "$rc" != 0 && "$rc" != 124 ]] && grep -qE 'E_MISSING_DEP|E_CANCELLED' <<<"$out"; then
+        ok "closed stdin -> named refusal before any prompt (rc=$rc, no hang)"
+    else
+        bad "closed stdin should refuse with a named error, not hang" "rc=$rc $out"
+    fi
+}
+
+#------------------------------------------------------------------------------
 # NEGATIVE — every load-bearing assertion above, deliberately broken. An
 # assertion that cannot go red is decoration; this mode watches each one fail.
 # It reports PASS when the underlying check correctly reports a problem.
@@ -430,10 +466,10 @@ MODE="${1:-all}"
 [[ $# -le 1 ]] || { echo "one mode per run (got: $*)" >&2; exit 64; }
 
 case "$MODE" in
-    help|dry|badworker|deadrelay|local|idem|teardown|negative) "mode_$MODE" ;;
+    help|dry|badworker|deadrelay|local|idem|teardown|tty|negative) "mode_$MODE" ;;
     all) mode_help; mode_dry; mode_badworker; mode_deadrelay
-         mode_local; mode_idem; mode_teardown; mode_negative ;;
-    *) echo "usage: $(basename "$0") [help|dry|badworker|deadrelay|local|idem|teardown|negative|all]" >&2
+         mode_local; mode_idem; mode_teardown; mode_tty; mode_negative ;;
+    *) echo "usage: $(basename "$0") [help|dry|badworker|deadrelay|local|idem|teardown|tty|negative|all]" >&2
        exit 64 ;;
 esac
 
