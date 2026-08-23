@@ -211,13 +211,21 @@ fi
 #   relay:     tcx.sh read — the real m1 path; retried over spurious timeouts.
 #   container: scan EVERY tmux socket, as the worker itself does.
 cap_container() {
+    # Mirror worker.py's socket discovery: default resolution first, then
+    # every socket in $TMUX_TMPDIR//tmp/tmux-<uid>/, then sockets mined from
+    # running tmux processes (-S path) — a session can live on any of them.
     docker exec "$CONTAINER" su - b -c '
-        for s in /tmp/tmux-$(id -u)/*; do
+        if out=$(tmux capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
+            printf "%s\n" "$out"; exit 0
+        fi
+        for s in ${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/* /tmp/tmux-$(id -u)/* \
+                 $(ps -eo args= | sed -n "s/.*tmux[^ ]* .*-S \([^ ]*\).*/\1/p" | sort -u); do
+            [ -e "$s" ] || continue
             if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
                 printf "%s\n" "$out"; exit 0
             fi
         done
-        echo "E2E_NO_SOCKET_HAD_SESSION"; exit 1'
+        echo "E2E_NO_SOCKET_HAD_SESSION"; ps -eo args= | grep tmu[x]; exit 1'
 }
 cap_relay() { TCX_READ_WAIT=25 "$ROOT/tcx.sh" read 200 2>/dev/null; }
 seen_reply() { grep -F "$SENTINEL" | grep -cv "Reply with exactly" ; }
@@ -259,9 +267,7 @@ if (( ! DRY )); then
         fail claude-start "pane $T_PANE never reported cmd=claude after 3 launch rounds"
     fi
     note "pane $T_PANE reports cmd=claude — safe to type"
-    sleep 5   # let the TUI finish drawing after the process appears
-    run "$ROOT/tcx.sh" send "Reply with exactly: $SENTINEL" \
-        || fail send "tcx.sh send failed"
+    sleep 15   # let the TUI finish drawing after the process appears
 fi
 
 step "7. PROOF — read the reply out of the container's claude pane"
@@ -271,14 +277,22 @@ if (( DRY )); then
     # line that lies (STRICT rule 11). The verdict is explicit non-proof.
     printf 'DRY-RUN-ONLY\n'; exit 0
 fi
-t=0; got=""; last_container_cap=""
-while (( t < 300 )); do
-    got="$(cap_relay | seen_reply || true)"
-    [[ "${got:-0}" -ge 1 ]] && { note "proof path: relay capture-pane"; break; }
-    last_container_cap="$(cap_container || true)"
-    got="$(seen_reply <<<"$last_container_cap" || true)"
-    [[ "${got:-0}" -ge 1 ]] && { note "proof path: in-container pane read"; break; }
-    sleep 10; t=$((t+10))
+# The sentinel too is typed in rounds: a TUI that is still drawing can drop
+# the first prompt exactly like a starting shell drops keys. Each round types
+# the sentinel once and then watches both capture paths for the reply.
+got=""
+for send_round in 1 2 3; do
+    run "$ROOT/tcx.sh" send "Reply with exactly: $SENTINEL" \
+        || { note "sentinel send failed (round $send_round)"; sleep 10; continue; }
+    t=0
+    while (( t < 100 )); do
+        got="$(cap_relay | seen_reply || true)"
+        [[ "${got:-0}" -ge 1 ]] && { note "proof path: relay capture-pane"; break 2; }
+        got="$(cap_container | seen_reply || true)"
+        [[ "${got:-0}" -ge 1 ]] && { note "proof path: in-container pane read"; break 2; }
+        sleep 10; t=$((t+10))
+    done
+    note "no reply after round $send_round — re-typing the sentinel"
 done
 if [[ "${got:-0}" -ge 1 ]]; then
     proof="$(cap_relay || true)"
@@ -288,6 +302,8 @@ if [[ "${got:-0}" -ge 1 ]]; then
     cleanup
     printf 'PASS\n'; exit 0
 fi
-note "pane tail for diagnosis (last 25 lines, in-container scan):"
+note "pane tail for diagnosis — relay path:"
+cap_relay | tail -25 | sed 's/^/e2e:   /' >&2
+note "pane tail for diagnosis — in-container scan:"
 cap_container | tail -25 | sed 's/^/e2e:   /' >&2
 fail sentinel-capture "no '$SENTINEL' reply in the container claude pane within 3m"
