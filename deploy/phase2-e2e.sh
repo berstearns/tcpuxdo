@@ -180,8 +180,21 @@ if (( ! DRY )); then
 fi
 
 step "5. m1 runs THE COMMAND (never i3): cockpit builds the remote claude session"
-run env NO_COLOR=1 "$COCKPIT" --tty --no-local -w "$WNAME" -s "$RSESS" -d '~' \
-    || fail cockpit "AUTO-tcx-cockpit.sh failed against worker $WNAME"
+# TCX_COCKPIT_WAIT raised: a container fresh off its install answers its first
+# ops slowly (pacman cache flush, first tmux server start); 25s was observed
+# too short for the pane to reach the registry, 120s covers the cold start.
+if ! run env NO_COLOR=1 TCX_COCKPIT_WAIT=120 "$COCKPIT" --tty --no-local \
+        -w "$WNAME" -s "$RSESS" -d '~'; then
+    note "diagnosis — live registry for $WNAME:"
+    "$ROOT/tcpuxdo" --op state 2>/dev/null \
+        | jq -r --arg w "$WNAME" '(.state[$w].panes // {}) | keys[]' \
+        | sed 's/^/e2e:   /' >&2
+    note "diagnosis — container worker pane tail:"
+    docker exec "$CONTAINER" su - b -c \
+        'tmux capture-pane -p -t tcpuxdo-worker -S -30 2>/dev/null' 2>/dev/null \
+        | tail -15 | sed 's/^/e2e:   /' >&2
+    fail cockpit "AUTO-tcx-cockpit.sh failed against worker $WNAME"
+fi
 
 step "6. sentinel through the relay"
 if (( ! DRY )); then
