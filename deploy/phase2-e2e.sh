@@ -159,11 +159,11 @@ else
         note "pane nakedrun missed probe $probe_try — retrying"
     done
     (( probe_ok )) || fail fserve "pane nakedrun not responding after 3 probes"
-    marker="READY-$RUN_ID"
+    # No intermediate marker: the probe above already proved the pane responds,
+    # and a cold fserve bring-up (fresh droplet) blocks well past 60s before
+    # any further keystroke would even be read. Wait for READY itself.
     send_cmd "$SERVE" "fserve share $TTL $XFER/stage0/i.sh $XFER/payload.tar.zst"
-    send_cmd "$SERVE" "echo $marker"
-    wait_for_marker "$SERVE" "$marker" 60         || fail fserve "pane nakedrun not responding"
-    wait_for_marker "$SERVE" 'fserve is up — READY' 600 || fail fserve "share never READY"
+    wait_for_marker "$SERVE" 'fserve is up — READY' 900 || fail fserve "share never READY in 15m"
     parse_share "$SERVE"                          || fail fserve "cannot parse the share block"
     for cn in "$SHARE_CN_I" "$SHARE_CN_P"; do
         code=$(curl -s -o /dev/null -w '%{http_code}' -u "fdrop:$SHARE_PASS" -k \
