@@ -389,6 +389,26 @@ collect_inputs() {
     fi
 }
 
+# The remote directory is INTERPOLATED into a shell command that runs on the
+# worker: `cd <dir> && claude`. Nominally the argument is a directory; without a
+# grammar its actual domain is arbitrary shell, because `-d '~ && curl … | sh'`
+# is a perfectly good string. An operation whose stated domain and real domain
+# differ that far is an unbounded primitive — a general-purpose escape into raw
+# code — and bounding it is the whole point of naming the domain first
+# (docs/cockpit-algebra.md, R4).
+#
+# A POSITIVE grammar, not a blocklist: every shell metacharacter is absent
+# because only these characters are present. That is also what makes the
+# unquoted `cd <dir>` safe, and unquoted is required — `cd '~/p/x'` would not
+# expand the tilde.
+validate_dir() {
+    [[ -n "${CONFIG[dir]}" ]] || return 0
+    [[ "${CONFIG[dir]}" =~ ^[A-Za-z0-9_.~/+-]+$ ]] || die E_BAD_DIR \
+        "remote dir '${CONFIG[dir]}' has characters outside [A-Za-z0-9_.~/+-].
+  It is interpolated into 'cd <dir> && ${CONFIG[claude_cmd]}' on the worker, so a
+  space or a shell metacharacter there is arbitrary remote code, not a path." 2
+}
+
 # tcpux's IDENT grammar is [A-Za-z0-9_-]+. A session name outside it is
 # rejected by the CS1 axiom on the relay; catching it here names the reason.
 validate_session_name() {
@@ -711,6 +731,7 @@ main() {
     if (( DO_REMOTE )); then
         collect_inputs
         validate_session_name
+        validate_dir
         validate_worker
         remote_half
     else

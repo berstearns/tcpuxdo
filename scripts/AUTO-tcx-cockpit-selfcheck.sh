@@ -396,7 +396,27 @@ mode_negative() {
         && ok "--no-remote --no-local -> E_USAGE, exit 64" \
         || bad "the empty-work combination should be a usage error" "rc=$rc $out"
 
-    # (i) a session name outside the IDENT grammar is refused BEFORE the relay
+    # (i) the remote dir is a BOUNDED primitive. `-d` is interpolated into
+    #     `cd <dir> && claude` on the worker, so an unbounded -d is arbitrary
+    #     remote code wearing a path's name. Both halves are asserted: the
+    #     shell-metacharacter forms are refused, and an ordinary path is not.
+    local d
+    for d in '~ && curl x | sh' '~; rm -rf /' '$(id)' '`id`' '~/p/a b'; do
+        out="$(cockpit -w x -s "$SESS" -d "$d" 2>&1)"; rc=$?
+        if [[ "$rc" == 2 ]] && grep -q 'E_BAD_DIR' <<<"$out"; then
+            ok "remote dir refused: $d"
+        else
+            bad "remote dir NOT refused: $d" "rc=$rc $out"
+        fi
+    done
+    for d in '~' '~/p/ferret' '/home/b/p/tcpuxdo' './x' '~/a-b_c.d+e'; do
+        out="$(cockpit -w no-such-worker-xyz -s "$SESS" -d "$d" 2>&1)"
+        grep -q 'E_BAD_DIR' <<<"$out" \
+            && bad "ordinary path wrongly refused: $d" "$out" \
+            || ok "ordinary path accepted: $d"
+    done
+
+    # (j) a session name outside the IDENT grammar is refused BEFORE the relay
     out="$(cockpit --no-remote -s 'bad name!' 2>&1)"; rc=$?
     [[ "$rc" == 2 ]] && grep -q 'E_BAD_SESSION' <<<"$out" \
         && ok "a non-IDENT session name -> E_BAD_SESSION, exit 2" \
