@@ -649,7 +649,12 @@ remote_half() {
         # `exec` matters: without it bash stays the pane's foreground process,
         # the registry reports cmd=bash forever, and neither this script's
         # reuse check nor any watcher can ever see that claude is running.
-        local launch="bash -lc 'cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
+        # The explicit PATH prepend matters just as much: the claude installer
+        # drops the binary (and the credpipe wrapper) into ~/.local/bin but
+        # does NOT write the export — measured on a naked Arch container, a
+        # LOGIN shell still cannot see claude. So the launch carries its own
+        # PATH and depends on no rc file at all.
+        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
         step "remote: send-keys \"$launch\" -> $w $pane"
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
             -c "$launch" >/dev/null \

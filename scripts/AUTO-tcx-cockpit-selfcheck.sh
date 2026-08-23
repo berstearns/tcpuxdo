@@ -149,8 +149,9 @@ mode_dry() {
     # PATH-safety: the remote launch must go through a LOGIN shell, so claude
     # resolves even when the fresh pane never sourced the rc that set PATH.
     grep -qF -- "bash -lc" <<<"$out" && grep -qF -- "exec " <<<"$out" \
-        && ok "remote launch is PATH-safe AND visible (login shell + exec)" \
-        || bad "remote launch must be 'bash -lc … exec claude' — else PATH breaks or cmd stays bash" "$out"
+        && grep -qF -- '.local/bin' <<<"$out" \
+        && ok "remote launch is PATH-safe AND visible (login shell + explicit ~/.local/bin + exec)" \
+        || bad "remote launch must carry its own PATH and exec claude — rc files provably do not" "$out"
 
     # And the tmux side, including the pane-title calls.
     for want in "tmux new-session" "tmux split-window" "select-pane" "tcx-stream" "tcx-send"; do
