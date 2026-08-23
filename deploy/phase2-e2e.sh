@@ -215,13 +215,13 @@ cap_container() {
     # every socket in $TMUX_TMPDIR//tmp/tmux-<uid>/, then sockets mined from
     # running tmux processes (-S path) — a session can live on any of them.
     docker exec "$CONTAINER" su - b -c '
-        if out=$(tmux capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
+        if out=$(tmux capture-pane -p -t "='"$RSESS"':" -S -200 -J 2>&1); then
             printf "%s\n" "$out"; exit 0
         fi
         for s in ${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/* /tmp/tmux-$(id -u)/* \
                  $(ps -eo args= | sed -n "s/.*tmux[^ ]* .*-S \([^ ]*\).*/\1/p" | sort -u); do
             [ -e "$s" ] || continue
-            if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
+            if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"':" -S -200 -J 2>&1); then
                 printf "%s\n" "$out"; exit 0
             fi
         done
