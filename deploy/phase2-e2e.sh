@@ -183,8 +183,19 @@ step "5. m1 runs THE COMMAND (never i3): cockpit builds the remote claude sessio
 # TCX_COCKPIT_WAIT raised: a container fresh off its install answers its first
 # ops slowly (pacman cache flush, first tmux server start); 25s was observed
 # too short for the pane to reach the registry, 120s covers the cold start.
-if ! run env NO_COLOR=1 TCX_COCKPIT_WAIT=120 "$COCKPIT" --tty --no-local \
-        -w "$WNAME" -s "$RSESS" -d '~'; then
+# Retried up to 3×: the cockpit is idempotent (an existing session is reused,
+# nothing duplicated), and a transient m1→relay blip (observed: errno 113
+# mid-run, gone seconds later) must not sink a 15-minute container build.
+cockpit_ok=0
+for attempt in 1 2 3; do
+    if run env NO_COLOR=1 TCX_COCKPIT_WAIT=120 "$COCKPIT" --tty --no-local \
+            -w "$WNAME" -s "$RSESS" -d '~'; then
+        cockpit_ok=1; break
+    fi
+    note "cockpit attempt $attempt failed — retrying in 15s (idempotent reuse)"
+    sleep 15
+done
+if (( ! cockpit_ok )); then
     note "diagnosis — live registry for $WNAME:"
     "$ROOT/tcpuxdo" --op state 2>/dev/null \
         | jq -r --arg w "$WNAME" '(.state[$w].panes // {}) | keys[]' \
