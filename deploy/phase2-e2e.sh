@@ -200,7 +200,24 @@ step "6. sentinel through the relay"
 if (( ! DRY )); then
     TARGET_LINE="$("$COCKPIT" --print-target)" || fail target "cockpit saved no target"
     note "target: $TARGET_LINE"
-    sleep 20   # give claude time to finish starting before the prompt lands
+    T_PANE="${TARGET_LINE#*	}"
+    # Keys sent into a still-starting TUI are silently dropped (STRICT A4), so
+    # do not sleep-and-hope: wait until the registry reports the pane's command
+    # IS claude. First start on a cold container takes well over a minute.
+    t=0
+    until "$ROOT/tcpuxdo" --op state 2>/dev/null \
+          | jq -e --arg w "$WNAME" --arg p "$T_PANE" \
+               '.state[$w].panes[$p].cmd == "claude"' >/dev/null; do
+        (( t >= 300 )) && {
+            note "diagnosis — pane cmd right now:"
+            "$ROOT/tcpuxdo" --op state 2>/dev/null \
+                | jq -r --arg w "$WNAME" --arg p "$T_PANE" '.state[$w].panes[$p]' >&2
+            fail claude-start "pane $T_PANE never reported cmd=claude within 5m"
+        }
+        sleep 10; t=$((t+10))
+    done
+    note "pane $T_PANE reports cmd=claude — safe to type"
+    sleep 5   # let the TUI finish drawing after the process appears
     run "$ROOT/tcx.sh" send "Reply with exactly: $SENTINEL" \
         || fail send "tcx.sh send failed"
 fi
@@ -213,9 +230,9 @@ if (( DRY )); then
     printf 'DRY-RUN-ONLY\n'; exit 0
 fi
 t=0; got=""
-while (( t < 180 )); do
+while (( t < 300 )); do
     got="$(docker exec "$CONTAINER" su - b -c \
-          "tmux capture-pane -p -t '=$RSESS' -S -200 -J 2>/dev/null" 2>/dev/null \
+          "tmux capture-pane -p -t '=$RSESS' -S -200 -J" \
           | grep -F "$SENTINEL" | grep -cv "Reply with exactly" || true)"
     [[ "${got:-0}" -ge 1 ]] && break
     sleep 10; t=$((t+10))
@@ -223,12 +240,12 @@ done
 if [[ "${got:-0}" -ge 1 ]]; then
     note "sentinel reply captured from the container pane:"
     docker exec "$CONTAINER" su - b -c \
-        "tmux capture-pane -p -t '=$RSESS' -S -200 -J 2>/dev/null" \
+        "tmux capture-pane -p -t '=$RSESS' -S -200 -J" \
         | grep -F "$SENTINEL" | sed 's/^/e2e:   /' >&2
     cleanup
     printf 'PASS\n'; exit 0
 fi
 note "pane tail for diagnosis (last 25 lines):"
 docker exec "$CONTAINER" su - b -c \
-    "tmux capture-pane -p -t '=$RSESS' -S -200 -J 2>/dev/null" | tail -25 | sed 's/^/e2e:   /' >&2
+    "tmux capture-pane -p -t '=$RSESS' -S -200 -J" | tail -25 | sed 's/^/e2e:   /' >&2
 fail sentinel-capture "no '$SENTINEL' reply in the container claude pane within 3m"
