@@ -387,13 +387,17 @@ pane_cmd() {  # $1 worker  $2 pane
 # (≈30 lines) rather than split into AUTO-tcx-cockpit-rofi.sh: a second file
 # that is only ever called from one place earns nothing.
 # ============================================================================
-rofi_pick() {  # $1 prompt  $2.. options ; stdin is closed so a piped caller
-               # can never make rofi read the pipe (constraint: </dev/null)
-    printf '%s\n' "${@:2}" | rofi -dmenu -i -p "$1" -lines "${CONFIG[rofi_lines]}" </dev/null
+# NOTE: no `</dev/null` here. rofi -dmenu reads its OPTION LIST from stdin, so
+# a trailing `</dev/null` replaces the piped options with an empty list and the
+# user gets a menu with zero entries ("no worker appears"). The pipe IS the
+# option list; a piped caller of the cockpit cannot leak into it because the
+# printf side is generated, not inherited.
+rofi_pick() {  # $1 prompt  $2.. options
+    printf '%s\n' "${@:2}" | rofi -dmenu -i -p "$1" -lines "${CONFIG[rofi_lines]}"
 }
 
 rofi_ask() {  # $1 prompt  $2 default ; free text
-    printf '%s\n' "$2" | rofi -dmenu -i -p "$1" -lines 1 </dev/null
+    printf '%s\n' "$2" | rofi -dmenu -i -p "$1" -lines 1
 }
 
 # Plain-tty twins of the rofi prompts. The menu goes to STDERR (stdout stays
