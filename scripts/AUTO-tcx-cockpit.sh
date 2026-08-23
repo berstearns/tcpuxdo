@@ -1,67 +1,81 @@
 #!/usr/bin/env bash
 #===============================================================================
-# WHAT:    AUTO-tcx-cockpit.sh — the stage-2 cockpit CLI so far: the option
-#          surface, the dry-run preview machinery, and a preflight that reads
-#          LIVE relay state to validate a worker, rofi prompts (or a named
-#          profile) for whatever the CLI did not supply, and the LOCAL half of
-#          the cockpit: a tmux session <name>-cockpit with two TITLED panes —
-#          "tcx-send" at a prompt, "tcx-stream" running setup/tcx-stream.sh.
+# WHAT:    AUTO-tcx-cockpit.sh — one command (and therefore one i3 shortcut)
+#          that gives you a REMOTE Claude Code pane plus a LOCAL two-pane
+#          cockpit for driving it:
 #
-# WHY:     The two halves this will grow (a remote Claude pane, a local two-pane
-#          cockpit) both hang off one argument surface and one preview
-#          mechanism, and both are dangerous to get wrong: one types into a live
-#          terminal, the other rewrites a shared target file. Landing the
-#          skeleton first means the flag parsing, the exit-code contract, and
-#          the "print it, do not run it" path are provable before anything can
-#          act on them.
+#            remote worker :   tmux session <name>, one pane running `claude`
+#            local m1      :   tmux session <name>-cockpit
+#                                pane "tcx-send"   — you type here
+#                                pane "tcx-stream" — live view of the remote pane
 #
-# INPUTS:  -w, --worker NAME    target worker
+# WHY:     Stage 1 gave us the pieces: `tcpuxdo` submits ops, `tcx-cli` resolves
+#          addresses and sends, `setup/tcx-stream.sh` mirrors a remote pane.
+#          Driving a remote Claude session still cost six manual steps in three
+#          different surfaces, in an order you had to remember, and getting the
+#          order wrong left half a session behind. This file is ORCHESTRATION
+#          ONLY: it dispatches to those engines and reimplements none of them.
+#          In particular there is NO capture loop in this file — that is
+#          setup/tcx-stream.sh, and it is run as the stream pane's command.
+#
+# INPUTS:  -w, --worker NAME    target worker (else: rofi over LIVE state)
 #          -s, --session NAME   remote session name; local becomes <name>-cockpit
 #          -d, --dir PATH       remote working directory for claude
 #          -p, --profile NAME   named preset from the profiles file
-#          -n, --dry-run        print every command, run NOTHING
-#              --no-color       disable ANSI
+#          -n, --dry-run        print every tcpuxdo/tmux argv, run NOTHING
+#              --no-remote      build only the local cockpit
+#              --no-local       create only the remote session
+#              --rebuild        kill an existing local cockpit and rebuild it
+#              --teardown       kill the local cockpit and exit (remote is left)
 #          -h, --help
 #
-#          Env overrides: TCX_COCKPIT_WORKER, TCX_COCKPIT_SESSION,
-#          TCX_COCKPIT_DIR, TCX_COCKPIT_PROFILE, TCX_COCKPIT_PROFILES_FILE,
-#          TCX_COCKPIT_ROFI_LINES, TCX_COCKPIT_DEAD_SECS, TCX_COCKPIT_HOST,
-#          TCX_COCKPIT_PORT.
+#          Env overrides (every CONFIG key): TCX_COCKPIT_WORKER,
+#          TCX_COCKPIT_SESSION, TCX_COCKPIT_DIR, TCX_COCKPIT_PROFILE,
+#          TCX_COCKPIT_PROFILES_FILE, TCX_COCKPIT_CLAUDE_CMD,
+#          TCX_COCKPIT_SHORTCUT, TCX_COCKPIT_DEAD_SECS, TCX_COCKPIT_WAIT,
+#          TCX_COCKPIT_ROFI_LINES.
 #
 # OUTPUTS / SIDE EFFECTS:
-#          creates a local tmux session <name>-cockpit with two titled panes.
-#          One read-only relay RPC (--op state) when a worker is supplied.
-#          Nothing is sent to any remote pane; no file is written.
-#          exit 0 ok · 1 runtime failure · 2 bad input · 3 relay unreachable
-#          · 64 usage error.
+#          remote: create-session / create-pane / send-keys on ONE worker,
+#                  plus a `tcpuxdo shortcut set claude-main` naming that pane.
+#          local:  a tmux session <name>-cockpit with two TITLED panes.
+#          No file is written: aiming the shared target file at the new pane
+#                  is the NEXT commit, deliberately kept separate.
+#          exit 0 ok · 1 runtime failure · 2 bad input (unknown worker, …)
+#          · 3 relay unreachable (CANNOT TELL) · 64 usage error.
 #
 # USAGE (combinatorial):
-#   AUTO-tcx-cockpit.sh -w newlaptop -s ferret -d '~/p/ferret'
-#       # resolve the three inputs and print the plan
-#   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
-#       # the same, in dry-run mode
 #   AUTO-tcx-cockpit.sh
-#       # rofi asks for worker (from LIVE state), session and dir
+#       # rofi asks for worker (from LIVE state), session, dir — then both halves
+#   AUTO-tcx-cockpit.sh -w newlaptop -s ferret -d '~/p/ferret'
+#       # fully specified, no prompt at all — the i3-shortcut-friendly form
 #   AUTO-tcx-cockpit.sh -p ferret
-#       # the same three inputs, from a saved profile
-#   AUTO-tcx-cockpit.sh -w no-such-worker -s ferret -d '~'
-#       # INVALID: unknown worker, exit 2, with the live worker list
-#   AUTO-tcx-cockpit.sh --nonsense
-#       # INVALID: unknown option, exit 64
+#       # the same, from a saved profile
+#   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
+#       # dry run: prints every tcpuxdo and tmux argv, creates nothing
+#   AUTO-tcx-cockpit.sh --no-remote -s ferret
+#       # only the local cockpit (remote session already exists)
+#   AUTO-tcx-cockpit.sh --no-local -w newlaptop -s ferret -d '~/p/ferret'
+#       # only the remote session (you already have a cockpit open)
+#   AUTO-tcx-cockpit.sh --teardown -s ferret
+#       # kill the LOCAL cockpit; the remote claude session keeps running
+#   AUTO-tcx-cockpit.sh --no-remote --no-local
+#       # INVALID: nothing left to do, exit 64
 #
-# NOT IN THIS COMMIT, on purpose: the remote half — create-session,
-#          create-pane, send-keys, and the shared target file. Until it lands,
-#          the stream pane shows "no target set", which is what tcx-stream.sh
-#          prints when it has nothing to mirror.
+# RE-RUN SAFETY: idempotent by construction.
+#          remote — create-session is skipped when the session already exists in
+#                   the registry; the claude pane is REUSED, never duplicated,
+#                   and `cd … && claude` is only sent into a pane that is not
+#                   already running claude.
+#          local  — an existing <name>-cockpit with the two titled panes is
+#                   REUSED. A malformed one is a NAMED error pointing at
+#                   --rebuild; it is never silently duplicated or repaired.
+#          A send is never retried automatically.
 #
 # PANE ADDRESSING: never `session:window.index` — indexes re-map on every split.
 #          Panes are created with `-P -F '#{pane_id}'`, titled with
 #          `select-pane -T`, and re-found by TITLE. A duplicate title is a hard
 #          error, never a `head -1` guess (~/.claude/rules/tmux-pane-routing.md).
-#
-# RE-RUN SAFETY: idempotent. An existing <name>-cockpit carrying both titled
-#          panes is REUSED. A malformed one is a NAMED error pointing at
-#          --rebuild; it is never silently duplicated or repaired.
 #===============================================================================
 
 set -uo pipefail   # NOT -e: exit codes are handled explicitly, everywhere.
@@ -82,10 +96,19 @@ declare -A CONFIG=(
     [dir]="${TCX_COCKPIT_DIR:-}"
     [profile]="${TCX_COCKPIT_PROFILE:-}"
     [profiles_file]="${TCX_COCKPIT_PROFILES_FILE:-$HOME/.config/tcx-cockpit/profiles.conf}"
-    [rofi_lines]="${TCX_COCKPIT_ROFI_LINES:-12}"
+    # The command the remote pane ends up running. Overridable because a node
+    # may need `claude --dangerously-skip-permissions` or a wrapper.
+    [claude_cmd]="${TCX_COCKPIT_CLAUDE_CMD:-claude}"
+    # A tcpuxdo SHORTCUT is the only stable, protocol-supported name for a
+    # remote pane today — the worker does not sync #{pane_title}. See
+    # docs/cockpit.md "The one thing the protocol cannot do".
+    [shortcut]="${TCX_COCKPIT_SHORTCUT:-claude-main}"
     # A worker silent longer than this is treated as DEAD: submitting to it
     # queues an op nobody will ever run, which looks exactly like success.
     [dead_secs]="${TCX_COCKPIT_DEAD_SECS:-180}"
+    # Seconds to wait for the registry to reflect a session/pane we created.
+    [wait]="${TCX_COCKPIT_WAIT:-25}"
+    [rofi_lines]="${TCX_COCKPIT_ROFI_LINES:-12}"
     # Relay override, forwarded to client.py as --host/--port.
     #
     # This exists because ./tcpuxdo does `set -o allexport; . .env`, which makes
@@ -111,10 +134,12 @@ build_relay_flags() {
 }
 
 DRY=0
+DO_REMOTE=1
+DO_LOCAL=1
 REBUILD=0
 TEARDOWN=0
 
-# Local pane titles. Fixed, because the self-check and docs both name them.
+# Local pane titles. Fixed, because the selfcheck and docs both name them.
 SEND_TITLE="tcx-send"
 STREAM_TITLE="tcx-stream"
 
@@ -151,6 +176,8 @@ parse_args() {
             -p|--profile)  [[ $# -ge 2 ]] || die E_USAGE "-p needs a value" 64
                            CONFIG[profile]="$2"; shift 2 ;;
             -n|--dry-run)  DRY=1; shift ;;
+            --no-remote)   DO_REMOTE=0; shift ;;
+            --no-local)    DO_LOCAL=0; shift ;;
             --rebuild)     REBUILD=1; shift ;;
             --teardown)    TEARDOWN=1; shift ;;
             --no-color)    B=""; D=""; X=""; G=""; Y=""; R=""; C=""; shift ;;
@@ -163,17 +190,19 @@ show_help() {
     cat <<EOF
 Usage: AUTO-tcx-cockpit.sh [OPTIONS]
 
-Resolves and validates the inputs for the stage-2 cockpit, then prints the
-plan. The worker is checked against LIVE relay state, never a hardcoded list.
+One command → a remote Claude Code pane on a tcpuxdo worker, plus a local
+two-pane tmux cockpit (send + live stream) aimed at it.
 
 Options:
-  -w, --worker NAME     target worker
+  -w, --worker NAME     target worker (skip the rofi prompt)
   -s, --session NAME    remote session name; local is <NAME>-cockpit
   -d, --dir PATH        remote working directory for claude
   -p, --profile NAME    named preset from ${CONFIG[profiles_file]}
-  -n, --dry-run         print every command, run nothing
+  -n, --dry-run         print every tmux/tcpuxdo command, run nothing
+      --no-remote       only build the local cockpit
+      --no-local        only create the remote session
       --rebuild         kill an existing local cockpit and rebuild it
-      --teardown        kill the local cockpit and exit
+      --teardown        kill the local cockpit and exit (remote keeps running)
       --no-color        disable ANSI
   -h, --help            this text
 
@@ -191,6 +220,7 @@ Examples:
   AUTO-tcx-cockpit.sh -w newlaptop -s ferret -d '~/p/ferret'
   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
   AUTO-tcx-cockpit.sh -p ferret
+  AUTO-tcx-cockpit.sh --no-remote -s ferret
   AUTO-tcx-cockpit.sh --teardown -s ferret
 EOF
 }
@@ -307,9 +337,20 @@ worker_age_secs() {  # seconds since the worker last reported, or "" if never
         | awk -v now="$(date +%s)" '{ printf "%d\n", ($1 > 0 ? now - $1 : -1) }'
 }
 
+# Pane ids belonging to one session on one worker, sorted.
+session_panes() {  # $1 worker  $2 session
+    jq -r --arg w "$1" --arg s "$2" \
+       '(.state[$w].panes // {}) | keys[] | select(startswith($s + ":"))' <<<"$STATE_JSON" \
+       | sort
+}
+
+pane_cmd() {  # $1 worker  $2 pane
+    jq -r --arg w "$1" --arg p "$2" '(.state[$w].panes[$p].cmd // "")' <<<"$STATE_JSON"
+}
+
 # ============================================================================
 # Input collection — rofi, but only for what is still missing. Kept inline
-# (~30 lines) rather than split into AUTO-tcx-cockpit-rofi.sh: a second file
+# (≈30 lines) rather than split into AUTO-tcx-cockpit-rofi.sh: a second file
 # that is only ever called from one place earns nothing.
 # ============================================================================
 rofi_pick() {  # $1 prompt  $2.. options ; stdin is closed so a piped caller
@@ -335,7 +376,7 @@ collect_inputs() {
         CONFIG[session]="$(rofi_ask "remote session name" "claude")"
         [[ -n "${CONFIG[session]}" ]] || die E_CANCELLED "no session name given" 2
     fi
-    if [[ -z "${CONFIG[dir]}" ]]; then
+    if [[ -z "${CONFIG[dir]}" && "$DO_REMOTE" == 1 ]]; then
         CONFIG[dir]="$(rofi_ask "remote working dir" "~")"
         [[ -n "${CONFIG[dir]}" ]] || die E_CANCELLED "no working directory given" 2
     fi
@@ -365,6 +406,87 @@ validate_worker() {
   Submitting would queue an op nobody runs — which looks exactly like success.
   Raise the bar with TCX_COCKPIT_DEAD_SECS if you know better." 2
     fi
+}
+
+# ============================================================================
+# REMOTE HALF — create-session → create-pane → send-keys, in that order, each
+# step skipped when the registry already shows its effect (idempotency).
+# ============================================================================
+
+# Block until the registry shows at least one pane for the session. tmux assigns
+# pane indices, so the created pane id is DISCOVERED, never assumed (AXIOMS.md,
+# "the sender must re-read state after the update").
+wait_for_session_pane() {  # $1 worker  $2 session -> prints the first pane id
+    local deadline=$(( $(date +%s) + ${CONFIG[wait]} )) panes
+    while :; do
+        load_state || return 3
+        panes="$(session_panes "$1" "$2")"
+        [[ -n "$panes" ]] && { head -1 <<<"$panes"; return 0; }
+        (( $(date +%s) >= deadline )) && return 1
+        sleep 1
+    done
+}
+
+remote_half() {
+    local w="${CONFIG[worker]}" s="${CONFIG[session]}" existing pane
+
+    require_state
+    existing="$(session_panes "$w" "$s")"
+
+    if [[ -z "$existing" ]]; then
+        step "remote: create-session $s on $w"
+        run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --op create-session --worker "$w" --session "$s" >/dev/null \
+            || die E_CREATE_SESSION "create-session '$s' on '$w' was rejected — run it by hand to see the axiom:
+  $TCPUXDO --op create-session --worker $w --session $s" 1
+        if (( DRY )); then
+            pane="$s:0:0"
+            note "dry-run: assuming the created pane would be $pane (tmux assigns the real index)"
+        else
+            pane="$(wait_for_session_pane "$w" "$s")" || die E_PANE_NEVER_APPEARED \
+                "session '$s' never showed a pane in the registry within ${CONFIG[wait]}s.
+  The op was accepted but the worker may be wedged:  tcx-cli doctor" 1
+        fi
+    else
+        pane="$(head -1 <<<"$existing")"
+        note "remote session '$s' already exists on $w — reusing pane $pane (no duplicate created)"
+    fi
+
+    # create-pane: only when the session somehow has no pane we can use. On a
+    # fresh create-session tmux already made one, and adding a second pane per
+    # run is exactly the silent duplication the idempotency constraint forbids.
+    if [[ -z "$pane" ]]; then
+        step "remote: create-pane $s:0:0 on $w"
+        run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --op create-pane --worker "$w" --pane "$s:0:0" >/dev/null \
+            || die E_CREATE_PANE "create-pane '$s:0:0' on '$w' was rejected" 1
+        pane="$(wait_for_session_pane "$w" "$s")" || die E_PANE_NEVER_APPEARED \
+            "create-pane accepted but no pane appeared for '$s' within ${CONFIG[wait]}s" 1
+    fi
+
+    REMOTE_PANE="$pane"
+
+    # A STABLE NAME for the pane. The worker syncs session/window/pane/cmd/pid
+    # but NOT #{pane_title}, so "the pane titled claude-main" is not addressable
+    # over this protocol (README, "Title-based addressing … is not wired in").
+    # A tcpuxdo SHORTCUT is the protocol's own stable alias and needs no engine
+    # change — see docs/cockpit.md for why we did not touch the protocol.
+    step "remote: shortcut ${CONFIG[shortcut]} -> $w $pane"
+    run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --op shortcut-set --name "${CONFIG[shortcut]}" \
+        --worker "$w" --pane "$pane" --force >/dev/null \
+        || note "shortcut '${CONFIG[shortcut]}' could not be set (continuing; addressing by pane id still works)"
+
+    # Launch claude — but only if that pane is not already running it. Sending
+    # `cd … && claude` into a live claude pane types the text INTO Claude.
+    local cur; cur="$(pane_cmd "$w" "$pane")"
+    if [[ "$cur" == "claude" ]]; then
+        note "pane $pane already runs claude — not sending a second launch"
+    else
+        step "remote: send-keys 'cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}' -> $w $pane"
+        run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
+            -c "cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}" >/dev/null \
+            || die E_SEND_FAILED "send-keys into $w $pane was rejected (busy pane? SK5) — check:
+  $TCPUXDO list $w" 1
+    fi
+
 }
 
 # ============================================================================
@@ -516,7 +638,10 @@ local_half() {
 report() {
     local sess; sess="$(local_session_name)"
     printf '\n%s── cockpit ──%s\n' "$B" "$X"
-    printf '  %ssession%s         %s\n' "$D" "$X" "${CONFIG[session]}"
+    printf '  %sworker%s          %s\n' "$D" "$X" "${CONFIG[worker]:-(none — local only)}"
+    printf '  %sremote session%s  %s\n' "$D" "$X" "${CONFIG[session]}"
+    printf '  %sremote pane%s     %s\n' "$D" "$X" "${REMOTE_PANE:-(not created this run)}"
+    printf '  %sshortcut%s        %s\n' "$D" "$X" "${CONFIG[shortcut]}"
     printf '  %slocal session%s   %s\n' "$D" "$X" "$sess"
     printf '  %spanes%s           %s=%s  %s=%s\n' "$D" "$X" \
         "$SEND_TITLE" "${LOCAL_SEND_PANE:--}" "$STREAM_TITLE" "${LOCAL_STREAM_PANE:--}"
@@ -531,6 +656,7 @@ report() {
 # ============================================================================
 # Main
 # ============================================================================
+REMOTE_PANE=""
 LOCAL_SEND_PANE=""
 LOCAL_STREAM_PANE=""
 TCX_CLI=""
@@ -538,30 +664,40 @@ TCX_CLI=""
 main() {
     parse_args "$@"
     apply_profile
+
+    (( DO_REMOTE || DO_LOCAL || TEARDOWN )) \
+        || die E_USAGE "--no-remote and --no-local together leave nothing to do" 64
+
     build_relay_flags
     preflight
 
-    # The local cockpit needs only a session name. The relay is not consulted
-    # for it — and must not be, or a fleet whose workers are all silent would
-    # block a cockpit that does not depend on them.
-    if [[ -z "${CONFIG[session]}" ]]; then
-        CONFIG[session]="$(rofi_ask "session name" "claude")"
-        [[ -n "${CONFIG[session]}" ]] || die E_CANCELLED "no session name given" 2
-    fi
-    validate_session_name
-
-    # A worker is not needed to build the cockpit, but if one was supplied it
-    # is still validated. A rung must ADD a capability, never quietly drop the
-    # one the rung below it added: skipping this here would make -w silently
-    # accept a name the previous commit correctly rejected.
-    [[ -n "${CONFIG[worker]}" ]] && validate_worker
-
+    # --teardown needs only the session name, and must never dial the relay.
     if (( TEARDOWN )); then
+        [[ -n "${CONFIG[session]}" ]] || { collect_inputs; }
+        validate_session_name
         teardown_local
         exit 0
     fi
 
-    local_half
+    # --no-remote is genuinely local: no relay read, no worker, and — crucially
+    # — no write to the shared target file.
+    if (( DO_REMOTE )); then
+        collect_inputs
+        validate_session_name
+        validate_worker
+        remote_half
+    else
+        [[ -n "${CONFIG[session]}" ]] || collect_inputs
+        validate_session_name
+        note "--no-remote: skipping the relay entirely (target file left untouched)"
+    fi
+
+    if (( DO_LOCAL )); then
+        local_half
+    else
+        note "--no-local: no cockpit built"
+    fi
+
     report
 }
 
