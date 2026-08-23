@@ -124,6 +124,16 @@ if (( ! DRY )); then
     SERVE="$(tps -s "$E2E_SESS" -r nakedrun)"   || fail driver-panes "tps cannot resolve nakedrun"
     TEST="$(tps -s "$E2E_SESS" -r nakeddocker)" || fail driver-panes "tps cannot resolve nakeddocker"
     note "serve=$SERVE test=$TEST"
+    # A freshly created pane's shell drops early keystrokes (STRICT A4). Wait
+    # until both panes settle on the default shell before anything is typed.
+    for p in "$SERVE" "$TEST"; do
+        t=0
+        until [[ "$(tmux display-message -p -t "$p" '#{pane_current_command}')" =~ ^(zsh|bash)$ ]]; do
+            (( t >= 20 )) && fail driver-panes "pane $p never reached a shell"
+            sleep 1; t=$((t+1))
+        done
+    done
+    sleep 2
 else
     SERVE="%DRY-serve"; TEST="%DRY-test"
 fi
@@ -140,6 +150,15 @@ step "2. fserve share ($TTL) from pane nakedrun"
 if (( DRY )); then
     note "DRY fserve share $TTL $XFER/stage0/i.sh $XFER/payload.tar.zst"
 else
+    # Responsiveness probe FIRST, retried — only then the expensive share.
+    probe_ok=0
+    for probe_try in 1 2 3; do
+        marker="PROBE-$RUN_ID-$probe_try"
+        send_cmd "$SERVE" "echo $marker"
+        wait_for_marker "$SERVE" "$marker" 20 && { probe_ok=1; break; }
+        note "pane nakedrun missed probe $probe_try — retrying"
+    done
+    (( probe_ok )) || fail fserve "pane nakedrun not responding after 3 probes"
     marker="READY-$RUN_ID"
     send_cmd "$SERVE" "fserve share $TTL $XFER/stage0/i.sh $XFER/payload.tar.zst"
     send_cmd "$SERVE" "echo $marker"
