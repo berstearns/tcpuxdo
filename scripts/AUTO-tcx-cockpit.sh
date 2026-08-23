@@ -2,9 +2,10 @@
 #===============================================================================
 # WHAT:    AUTO-tcx-cockpit.sh — the stage-2 cockpit CLI so far: the option
 #          surface, the dry-run preview machinery, and a preflight that reads
-#          LIVE relay state to validate the worker, and rofi prompts (or a named
-#          profile) for whatever the CLI did not supply. It resolves and CHECKS
-#          its inputs, then prints the plan. It builds nothing yet.
+#          LIVE relay state to validate a worker, rofi prompts (or a named
+#          profile) for whatever the CLI did not supply, and the LOCAL half of
+#          the cockpit: a tmux session <name>-cockpit with two TITLED panes —
+#          "tcx-send" at a prompt, "tcx-stream" running setup/tcx-stream.sh.
 #
 # WHY:     The two halves this will grow (a remote Claude pane, a local two-pane
 #          cockpit) both hang off one argument surface and one preview
@@ -28,8 +29,9 @@
 #          TCX_COCKPIT_PORT.
 #
 # OUTPUTS / SIDE EFFECTS:
-#          stdout, plus ONE read-only relay RPC (--op state). Nothing is
-#          created, nothing is sent, no file is written.
+#          creates a local tmux session <name>-cockpit with two titled panes.
+#          One read-only relay RPC (--op state) when a worker is supplied.
+#          Nothing is sent to any remote pane; no file is written.
 #          exit 0 ok · 1 runtime failure · 2 bad input · 3 relay unreachable
 #          · 64 usage error.
 #
@@ -47,11 +49,19 @@
 #   AUTO-tcx-cockpit.sh --nonsense
 #       # INVALID: unknown option, exit 64
 #
-# NOT IN THIS COMMIT, on purpose: the remote session and the local cockpit.
-#          Each lands as its own rung so it can be reverted without taking the
-#          option surface, the validation, or the prompts with it.
+# NOT IN THIS COMMIT, on purpose: the remote half — create-session,
+#          create-pane, send-keys, and the shared target file. Until it lands,
+#          the stream pane shows "no target set", which is what tcx-stream.sh
+#          prints when it has nothing to mirror.
 #
-# RE-RUN SAFETY: read-only and idempotent — there is nothing here to mutate yet.
+# PANE ADDRESSING: never `session:window.index` — indexes re-map on every split.
+#          Panes are created with `-P -F '#{pane_id}'`, titled with
+#          `select-pane -T`, and re-found by TITLE. A duplicate title is a hard
+#          error, never a `head -1` guess (~/.claude/rules/tmux-pane-routing.md).
+#
+# RE-RUN SAFETY: idempotent. An existing <name>-cockpit carrying both titled
+#          panes is REUSED. A malformed one is a NAMED error pointing at
+#          --rebuild; it is never silently duplicated or repaired.
 #===============================================================================
 
 set -uo pipefail   # NOT -e: exit codes are handled explicitly, everywhere.
@@ -59,6 +69,7 @@ set -uo pipefail   # NOT -e: exit codes are handled explicitly, everywhere.
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 REPO="$(cd "$HERE/.." && pwd)"
 TCPUXDO="$REPO/tcpuxdo"
+STREAM="$REPO/setup/tcx-stream.sh"
 
 # ============================================================================
 # CONFIG: env-var overridable, so one i3 binding can be re-purposed
@@ -100,6 +111,12 @@ build_relay_flags() {
 }
 
 DRY=0
+REBUILD=0
+TEARDOWN=0
+
+# Local pane titles. Fixed, because the self-check and docs both name them.
+SEND_TITLE="tcx-send"
+STREAM_TITLE="tcx-stream"
 
 # ── output ──────────────────────────────────────────────────────────────────
 if [[ -t 1 && -z "${NO_COLOR:-}" ]]; then
@@ -134,6 +151,8 @@ parse_args() {
             -p|--profile)  [[ $# -ge 2 ]] || die E_USAGE "-p needs a value" 64
                            CONFIG[profile]="$2"; shift 2 ;;
             -n|--dry-run)  DRY=1; shift ;;
+            --rebuild)     REBUILD=1; shift ;;
+            --teardown)    TEARDOWN=1; shift ;;
             --no-color)    B=""; D=""; X=""; G=""; Y=""; R=""; C=""; shift ;;
             *)             die E_USAGE "unknown option '$1' — try --help" 64 ;;
         esac
@@ -153,6 +172,8 @@ Options:
   -d, --dir PATH        remote working directory for claude
   -p, --profile NAME    named preset from ${CONFIG[profiles_file]}
   -n, --dry-run         print every command, run nothing
+      --rebuild         kill an existing local cockpit and rebuild it
+      --teardown        kill the local cockpit and exit
       --no-color        disable ANSI
   -h, --help            this text
 
@@ -170,6 +191,7 @@ Examples:
   AUTO-tcx-cockpit.sh -w newlaptop -s ferret -d '~/p/ferret'
   AUTO-tcx-cockpit.sh -n -w newlaptop -s ferret -d '~/p/ferret'
   AUTO-tcx-cockpit.sh -p ferret
+  AUTO-tcx-cockpit.sh --teardown -s ferret
 EOF
 }
 
@@ -233,6 +255,16 @@ preflight() {
         command -v "$c" >/dev/null || die E_MISSING_DEP "'$c' not on PATH — install it" 1
     done
     [[ -x "$TCPUXDO" ]] || die E_MISSING_DEP "tcpuxdo not executable at $TCPUXDO" 1
+    [[ -r "$STREAM"  ]] || die E_MISSING_ENGINE \
+        "setup/tcx-stream.sh missing at $STREAM — the stream pane would have nothing to run" 1
+    # tcx-cli is what the human types in the send pane; if it is absent the
+    # cockpit still works, but the printed next-step command would be a lie.
+    TCX_CLI="$(command -v tcx-cli 2>/dev/null)"
+    [[ -n "$TCX_CLI" ]] || { [[ -x "$REPO/tcx-cli" ]] && TCX_CLI="$REPO/tcx-cli"; }
+    [[ -n "$TCX_CLI" ]] || TCX_CLI="$HERE/AUTO-tcx-cli.sh"
+    [[ -x "$TCX_CLI" || -r "$TCX_CLI" ]] \
+        || die E_MISSING_DEP "tcx-cli not found (PATH, $REPO/tcx-cli, $HERE/AUTO-tcx-cli.sh)
+  fix:  bash $HERE/AUTO-tcx-cli.sh install" 1
     # rofi is only load-bearing when something still has to be asked for. It is
     # checked here (named, once) rather than at the prompt, where a missing
     # binary would look like the prompt being cancelled.
@@ -336,23 +368,201 @@ validate_worker() {
 }
 
 # ============================================================================
+# LOCAL HALF — the two-pane cockpit.
+#
+# Panes are addressed by %ID throughout. `session:window.index` is never used:
+# indexes re-map on every split, and the pane that ends up at .1 after a split
+# is not the pane that was there before it (~/.claude/rules/tmux-pane-routing.md).
+# ============================================================================
+local_session_name() { printf '%s-cockpit\n' "${CONFIG[session]}"; }
+
+session_exists() { tmux has-session -t "=$1" 2>/dev/null; }
+
+# Resolve a pane by TITLE inside one session. Zero hits and MORE THAN ONE hit
+# are both errors — a duplicate title is never resolved by taking the first.
+pane_by_title() {  # $1 session  $2 title
+    local hits n
+    hits="$(tmux list-panes -s -t "=$1" -F '#{pane_id}	#{pane_title}' 2>/dev/null \
+            | awk -F'\t' -v t="$2" '$2 == t { print $1 }')"
+    n="$(printf '%s' "$hits" | grep -c . || true)"
+    case "$n" in
+        1) printf '%s\n' "$hits"; return 0 ;;
+        0) return 1 ;;
+        *) printf 'cockpit: E_DUPLICATE_TITLE %s panes in %s are titled %s:\n%s\n' \
+               "$n" "$1" "$2" "$hits" >&2; return 2 ;;
+    esac
+}
+
+# A freshly-created pane is NOT ready for keystrokes: the shell's rc files are
+# still running, and anything sent before the first prompt is swallowed with no
+# error at all. Observed here: the staged line landed in a pane whose
+# pane_current_command was still `mkdir` (a zshrc line), and the pane came up
+# empty. Wait for a known shell before typing anything.
+#
+# "Any shell-looking command" is NOT the test. Observed here a second time: a
+# zshrc line spawns a short-lived `bash`, the first sample read `bash`, and the
+# nocorrect decision (constraint 4) was taken for the wrong shell. The pane's
+# shell is tmux's default-shell; wait for THAT, and for two identical samples,
+# so a transient child cannot answer for it.
+wait_for_shell() {  # $1 pane %ID -> prints the shell name, rc 1 on timeout
+    local pane="$1" deadline=$(( $(date +%s) + 10 )) cur prev="" want
+    want="$(basename "$(tmux show-options -gv default-shell 2>/dev/null || echo "${SHELL:-bash}")")"
+    while :; do
+        cur="$(tmux display-message -p -t "$pane" '#{pane_current_command}' 2>/dev/null)"
+        [[ "$cur" == "$want" && "$prev" == "$want" ]] && { printf '%s\n' "$cur"; return 0; }
+        prev="$cur"
+        (( $(date +%s) >= deadline )) && { printf '%s\n' "${cur:-unknown}"; return 1; }
+        sleep 0.2
+    done
+}
+
+# Stage a line in a pane WITHOUT running it. `send-keys -l` sends the argument
+# LITERALLY; without -l tmux reads it as key NAMES and any ';' or the word
+# 'Enter' inside it is mangled into a keypress.
+stage_line() {  # $1 pane %ID  $2 literal text
+    local pane="$1" text="$2" shell
+    if (( DRY )); then
+        # There is no pane to interrogate in a dry run, and printing the
+        # UNPREFIXED line would preview a command different from the one that
+        # would run. Fall back to the login shell, which is what the pane would
+        # have started (ergonomic rule 08: preview the command that acts).
+        shell="$(basename "${SHELL:-bash}")"
+    else
+        shell="$(wait_for_shell "$pane")" || {
+            note "pane $pane never reached a shell prompt (saw '$shell') — not staging a command there"
+            return 0
+        }
+    fi
+    # oh-my-zsh's ENABLE_CORRECTION turns a mistyped word into a blocking
+    # `correct 'x' to 'y'? [nyae]` prompt. `nocorrect` disarms it — and is a
+    # SYNTAX ERROR in bash, so it is only prefixed when the pane really is zsh.
+    [[ "$shell" == "zsh" ]] && text="nocorrect $text"
+    run tmux send-keys -t "$pane" -l "$text"
+}
+
+teardown_local() {
+    local sess; sess="$(local_session_name)"
+    if ! session_exists "$sess"; then
+        note "no local session '$sess' to tear down"
+        return 0
+    fi
+    step "local: kill-session $sess"
+    run tmux kill-session -t "=$sess" || die E_TEARDOWN "could not kill '$sess'" 1
+}
+
+local_half() {
+    local sess; sess="$(local_session_name)"
+
+    if session_exists "$sess"; then
+        if (( REBUILD )); then
+            step "local: --rebuild — killing existing $sess"
+            run tmux kill-session -t "=$sess" || die E_TEARDOWN "could not kill '$sess'" 1
+        else
+            # Reuse, but only if it is the cockpit we would have built. A
+            # half-built session silently reused is worse than a named error.
+            local sp st rc=0
+            sp="$(pane_by_title "$sess" "$SEND_TITLE")"   || rc=$?
+            st="$(pane_by_title "$sess" "$STREAM_TITLE")" || rc=$?
+            if (( rc == 0 )) && [[ -n "$sp" && -n "$st" ]]; then
+                LOCAL_SEND_PANE="$sp"; LOCAL_STREAM_PANE="$st"
+                note "local session '$sess' already has both titled panes — reusing it (nothing duplicated)"
+                return 0
+            fi
+            die E_COCKPIT_MALFORMED \
+                "local session '$sess' exists but does not have panes titled '$SEND_TITLE' and '$STREAM_TITLE'.
+  Refusing to guess which pane is which. Rebuild it deliberately:
+      $(basename "$0") --rebuild -s ${CONFIG[session]}
+  or tear it down:
+      $(basename "$0") --teardown -s ${CONFIG[session]}" 1
+        fi
+    fi
+
+    # Pane 1 — the send pane. `-P -F '#{pane_id}'` hands back a %ID; the index
+    # it happens to have right now is never recorded anywhere.
+    step "local: new-session $sess (pane '$SEND_TITLE')"
+    LOCAL_SEND_PANE="$(run_capture tmux new-session -d -s "$sess" -n cockpit \
+        -c "$REPO" -P -F '#{pane_id}')"
+    [[ -n "$LOCAL_SEND_PANE" ]] || die E_TMUX "tmux new-session produced no pane id" 1
+    run tmux select-pane -t "$LOCAL_SEND_PANE" -T "$SEND_TITLE"
+    # Titles only survive if tmux is allowed to keep them (some configs let the
+    # shell's escape sequences overwrite pane_title on every prompt).
+    #
+    # The window is addressed VIA THE PANE ID, not "=$sess". `-t =<session>` is
+    # a target-SESSION spelling; `set-option -w` wants a target-WINDOW and
+    # answers "no such window: =cockpittest-cockpit" — which, without -e, is a
+    # printed error the run happily continues past. A %ID resolves to its own
+    # window unambiguously and cannot re-map.
+    run tmux set-option -t "$LOCAL_SEND_PANE" -w allow-rename off
+    run tmux set-option -t "$LOCAL_SEND_PANE" -w automatic-rename off
+
+    # Pane 2 — the stream pane. tcx-stream.sh is given as the pane's COMMAND
+    # rather than typed in: nothing to autocorrect, nothing to quote wrong, and
+    # #{pane_start_command} then proves what the pane is running.
+    step "local: split-window (pane '$STREAM_TITLE' runs setup/tcx-stream.sh)"
+    LOCAL_STREAM_PANE="$(run_capture tmux split-window -h -t "$LOCAL_SEND_PANE" \
+        -c "$REPO" -P -F '#{pane_id}' "bash $STREAM")"
+    [[ -n "$LOCAL_STREAM_PANE" ]] || die E_TMUX "tmux split-window produced no pane id" 1
+    run tmux select-pane -t "$LOCAL_STREAM_PANE" -T "$STREAM_TITLE"
+
+    # Leave the send pane focused and pre-typed, but NOT executed.
+    run tmux select-pane -t "$LOCAL_SEND_PANE"
+    stage_line "$LOCAL_SEND_PANE" "$(basename "$TCX_CLI") send "
+}
+
+# ============================================================================
+# The closing block: what exists now, and the two or three things to type next.
+# Every command printed here must itself be runnable.
+# ============================================================================
+report() {
+    local sess; sess="$(local_session_name)"
+    printf '\n%s── cockpit ──%s\n' "$B" "$X"
+    printf '  %ssession%s         %s\n' "$D" "$X" "${CONFIG[session]}"
+    printf '  %slocal session%s   %s\n' "$D" "$X" "$sess"
+    printf '  %spanes%s           %s=%s  %s=%s\n' "$D" "$X" \
+        "$SEND_TITLE" "${LOCAL_SEND_PANE:--}" "$STREAM_TITLE" "${LOCAL_STREAM_PANE:--}"
+    printf '\n%s  next:%s\n' "$B" "$X"
+    printf '    %stmux attach -t %s%s\n' "$C" "$sess" "$X"
+    printf '    %s%s send %s%s          %s(from the %s pane)%s\n' \
+        "$C" "$(basename "$TCX_CLI")" "'your prompt'" "$X" "$D" "$SEND_TITLE" "$X"
+    printf '    %s%s --teardown -s %s%s\n' \
+        "$C" "$(basename "$0")" "${CONFIG[session]}" "$X"
+}
+
+# ============================================================================
 # Main
 # ============================================================================
+LOCAL_SEND_PANE=""
+LOCAL_STREAM_PANE=""
+TCX_CLI=""
+
 main() {
     parse_args "$@"
     apply_profile
     build_relay_flags
     preflight
-    collect_inputs
-    validate_session_name
-    validate_worker
 
-    printf '\n%s── cockpit ──%s\n' "$B" "$X"
-    printf '  %sworker%s          %s\n' "$D" "$X" "${CONFIG[worker]:-(unset)}"
-    printf '  %sremote session%s  %s\n' "$D" "$X" "${CONFIG[session]:-(unset)}"
-    printf '  %sremote dir%s      %s\n' "$D" "$X" "${CONFIG[dir]:-(unset)}"
-    printf '  %sdry run%s         %s\n' "$D" "$X" "$DRY"
-    printf '  %sengine%s          %s\n' "$D" "$X" "$TCPUXDO"
+    # The local cockpit needs only a session name. The relay is not consulted
+    # for it — and must not be, or a fleet whose workers are all silent would
+    # block a cockpit that does not depend on them.
+    if [[ -z "${CONFIG[session]}" ]]; then
+        CONFIG[session]="$(rofi_ask "session name" "claude")"
+        [[ -n "${CONFIG[session]}" ]] || die E_CANCELLED "no session name given" 2
+    fi
+    validate_session_name
+
+    # A worker is not needed to build the cockpit, but if one was supplied it
+    # is still validated. A rung must ADD a capability, never quietly drop the
+    # one the rung below it added: skipping this here would make -w silently
+    # accept a name the previous commit correctly rejected.
+    [[ -n "${CONFIG[worker]}" ]] && validate_worker
+
+    if (( TEARDOWN )); then
+        teardown_local
+        exit 0
+    fi
+
+    local_half
+    report
 }
 
 main "$@"
