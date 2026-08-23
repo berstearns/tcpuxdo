@@ -146,6 +146,12 @@ mode_dry() {
     [[ -z "$missing" ]] && ok "dry run previews the exact tcpuxdo argv (3 ops, in order)" \
                         || bad "dry-run preview lacks:$missing" "$out"
 
+    # PATH-safety: the remote launch must go through a LOGIN shell, so claude
+    # resolves even when the fresh pane never sourced the rc that set PATH.
+    grep -qF -- "bash -lc" <<<"$out" \
+        && ok "remote launch is PATH-safe (wrapped in a login shell: bash -lc)" \
+        || bad "remote launch is a bare command — command-not-found on a fresh pane" "$out"
+
     # And the tmux side, including the pane-title calls.
     for want in "tmux new-session" "tmux split-window" "select-pane" "tcx-stream" "tcx-send"; do
         grep -qF -- "$want" <<<"$out" || missing="$missing [$want]"

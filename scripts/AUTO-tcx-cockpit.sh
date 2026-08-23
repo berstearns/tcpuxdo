@@ -640,9 +640,16 @@ remote_half() {
     if [[ "$cur" == "claude" ]]; then
         note "pane $pane already runs claude — not sending a second launch"
     else
-        step "remote: send-keys 'cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}' -> $w $pane"
+        # PATH-SAFE LAUNCH: a fresh tmux pane's shell often has NOT sourced the
+        # rc that put ~/.local/bin (claude, the credpipe wrapper) on PATH — a
+        # bare `claude` is then command-not-found and the cockpit looks dead.
+        # A LOGIN shell (`bash -lc`) sources the profile first, so both the
+        # PATH and the credpipe wrapper apply. The dir grammar (validate_dir)
+        # guarantees no quote/metacharacter can break out of the -c string.
+        local launch="bash -lc 'cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}'"
+        step "remote: send-keys \"$launch\" -> $w $pane"
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
-            -c "cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}" >/dev/null \
+            -c "$launch" >/dev/null \
             || die E_SEND_FAILED "send-keys into $w $pane was rejected (busy pane? SK5) — check:
   $TCPUXDO list $w" 1
     fi
