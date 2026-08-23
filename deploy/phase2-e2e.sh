@@ -240,23 +240,41 @@ if (( DRY )); then
     # line that lies (STRICT rule 11). The verdict is explicit non-proof.
     printf 'DRY-RUN-ONLY\n'; exit 0
 fi
-t=0; got=""
+# Two independent proof paths, per the handoff ("via capture-pane OR reading
+# the pane inside the container"):
+#   relay:     tcx.sh read — the real m1 path; retried, because capture-pane
+#              is documented to time out spuriously.
+#   container: scan EVERY tmux socket — the worker enumerates sockets too, so
+#              the session may live on a non-default server.
+cap_container() {
+    docker exec "$CONTAINER" su - b -c '
+        for s in /tmp/tmux-$(id -u)/*; do
+            if out=$(tmux -S "$s" capture-pane -p -t "='"$RSESS"'" -S -200 -J 2>&1); then
+                printf "%s\n" "$out"; exit 0
+            fi
+        done
+        echo "E2E_NO_SOCKET_HAD_SESSION"; exit 1'
+}
+cap_relay() { TCX_READ_WAIT=25 "$ROOT/tcx.sh" read 200 2>/dev/null; }
+seen_reply() { grep -F "$SENTINEL" | grep -cv "Reply with exactly" ; }
+
+t=0; got=""; last_container_cap=""
 while (( t < 300 )); do
-    got="$(docker exec "$CONTAINER" su - b -c \
-          "tmux capture-pane -p -t '=$RSESS' -S -200 -J" \
-          | grep -F "$SENTINEL" | grep -cv "Reply with exactly" || true)"
-    [[ "${got:-0}" -ge 1 ]] && break
+    got="$(cap_relay | seen_reply || true)"
+    [[ "${got:-0}" -ge 1 ]] && { note "proof path: relay capture-pane"; break; }
+    last_container_cap="$(cap_container || true)"
+    got="$(seen_reply <<<"$last_container_cap" || true)"
+    [[ "${got:-0}" -ge 1 ]] && { note "proof path: in-container pane read"; break; }
     sleep 10; t=$((t+10))
 done
 if [[ "${got:-0}" -ge 1 ]]; then
-    note "sentinel reply captured from the container pane:"
-    docker exec "$CONTAINER" su - b -c \
-        "tmux capture-pane -p -t '=$RSESS' -S -200 -J" \
-        | grep -F "$SENTINEL" | sed 's/^/e2e:   /' >&2
+    proof="$(cap_relay || true)"
+    grep -qF "$SENTINEL" <<<"$proof" || proof="$(cap_container || true)"
+    note "sentinel reply captured:"
+    grep -F "$SENTINEL" <<<"$proof" | sed 's/^/e2e:   /' >&2
     cleanup
     printf 'PASS\n'; exit 0
 fi
-note "pane tail for diagnosis (last 25 lines):"
-docker exec "$CONTAINER" su - b -c \
-    "tmux capture-pane -p -t '=$RSESS' -S -200 -J" | tail -25 | sed 's/^/e2e:   /' >&2
+note "pane tail for diagnosis (last 25 lines, in-container scan):"
+cap_container | tail -25 | sed 's/^/e2e:   /' >&2
 fail sentinel-capture "no '$SENTINEL' reply in the container claude pane within 3m"
