@@ -646,7 +646,10 @@ remote_half() {
         # A LOGIN shell (`bash -lc`) sources the profile first, so both the
         # PATH and the credpipe wrapper apply. The dir grammar (validate_dir)
         # guarantees no quote/metacharacter can break out of the -c string.
-        local launch="bash -lc 'cd ${CONFIG[dir]} && ${CONFIG[claude_cmd]}'"
+        # `exec` matters: without it bash stays the pane's foreground process,
+        # the registry reports cmd=bash forever, and neither this script's
+        # reuse check nor any watcher can ever see that claude is running.
+        local launch="bash -lc 'cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
         step "remote: send-keys \"$launch\" -> $w $pane"
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
             -c "$launch" >/dev/null \
