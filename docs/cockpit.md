@@ -162,6 +162,59 @@ scripts/AUTO-tcx-cockpit-selfcheck.sh          # all modes
 scripts/AUTO-tcx-cockpit-selfcheck.sh negative # prove the assertions can fail
 ```
 
-Eight modes: `help`, `dry`, `badworker`, `deadrelay`, `local`, `idem`,
-`teardown`, `negative`. It creates and destroys its own throwaway tmux session,
+Eleven modes: `help`, `dry`, `badworker`, `deadrelay`, `local`, `idem`,
+`teardown`, `tty`, `gnu`, `completion`, `negative`. It creates and destroys its own throwaway tmux session,
 sends nothing to any remote pane, and never writes the shared target file.
+
+## Decoupling — the command vs. the keypress
+
+`AUTO-tcx-cockpit.sh` is a standalone GNU CLI: fully usable on a bare tty with
+flags and `--tty`, no i3, no rofi, no `$DISPLAY`. rofi is an OPTIONAL input
+frontend, auto-detected; when it is absent (or `--tty` is given) collection
+degrades to plain `read -r` prompts — it never fails for lack of rofi. The i3
+binding is a separate thin `exec` wrapper: printed by
+`scripts/AUTO-tcx-cockpit-i3bind.sh`, never installed by this repo, and not
+part of the test surface — the selfcheck and `deploy/phase2-e2e.sh` drive the
+command directly.
+
+## Tab completion
+
+```sh
+scripts/AUTO-tcx-cockpit.sh completion bash > ~/.local/share/bash-completion/completions/AUTO-tcx-cockpit.sh
+scripts/AUTO-tcx-cockpit.sh completion zsh  > ~/.zsh/completions/_AUTO-tcx-cockpit
+```
+
+Generated from the same flag list the parser and `--help` use; `-w/--worker`
+completes VALUES from live relay state (`--op state` + jq), `-d` completes
+directories.
+
+## The acceptance test
+
+`deploy/phase2-e2e.sh --yes` — the no-cheat end-to-end proof: a naked
+`archlinux:base` container acquires everything over a live fserve share
+(no `-v`, no `docker cp`), runs a real worker against the real relay, then m1
+runs the cockpit COMMAND, sends the sentinel `M1_TO_DOCKER_OK`, and the
+verdict is the reply captured out of the container's claude pane. `--yes` is
+required because the share costs money; `-n` previews every command.
+
+## GNU 17-point self-audit (GNU-TOOLING-STANDARD.md)
+
+| § | point | verdict | note |
+|---|---|---|---|
+| 1 | stdout data only | PASS | report/banners on stderr; `--print-target` is the machine query; selfcheck mode `gnu` asserts it |
+| 2 | distinct exit codes | PASS | 0/1/2/3/64/66 documented in `--help`; 69/78 unused (relay-unreachable uses 3, matching tcx-cli's contract — noted, not hidden) |
+| 3 | TTY-detect | PASS | `[ -t 1 ]` gates color; prompts auto-detect rofi/tty; closed stdin + missing input → named error, no hang |
+| 4 | --json for structure | N/A | the only machine output is one `worker<TAB>pane` line; JSON would add nothing yet |
+| 5 | stdin/`-` as filter | N/A | not a filter; tty prompts do read answers from stdin |
+| 6 | GNU flag vocabulary | PASS | -h/--help, --version, -n/--dry-run, --no-color; no invented synonyms |
+| 7 | -h one screen, examples | PASS | examples in header + help; full flag list in --help |
+| 8 | errors teach | PASS | every `die` names the error and the fix (e.g. E_COCKPIT_MALFORMED → --rebuild) |
+| 9 | zero-flag default | PASS | no flags → collect all inputs, build both halves |
+| 10 | one line after acting | PASS | report on stderr; step lines are `-q`-silenceable via redirect |
+| 11 | dry-run exact argv | PASS | one `run()` path builds preview and execution; selfcheck asserts verbatim argv |
+| 12 | idempotent, Ctrl-C safe | PASS | reuse-not-duplicate proven by selfcheck `idem`; sends never auto-retry |
+| 13 | config precedence | PASS | flags > TCX_COCKPIT_* env > profiles file > defaults; XDG paths |
+| 14 | --help/--version offline <100ms | PASS | both are pure printf paths, exit 0 |
+| 15 | never auto-run the billing verb | PASS | cockpit bills nothing; phase2-e2e.sh requires `--yes` for the fserve spend |
+| 16 | producer prints artifact path | PARTIAL | the artifact is the target line (printed via `--print-target`), not a file path; format is tcx.sh's, deliberately |
+| 17 | consumer validates ingest | PASS | worker/session/dir all validated (grammar-bounded) before any op |

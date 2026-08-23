@@ -29,6 +29,8 @@
 #            idem       --no-remote twice: still exactly one session, two panes
 #            teardown   --teardown removes the session and leaves nothing behind
 #            tty        --tty collects piped stdin answers without rofi
+#            gnu        stdout-is-data + documented exit codes (GNU §1/§2)
+#            completion bash+zsh completion scripts, worker-value completion
 #            negative   every assertion above, deliberately broken, must go RED
 #            all        every mode above (negative included)
 #
@@ -102,7 +104,7 @@ mode_help() {
     [[ "$rc" == 0 ]] && ok "--help exits 0" || bad "--help exited $rc" "$out"
     local f missing=""
     for f in -w --worker -s --session -d --dir -p --profile -n --dry-run \
-             --no-remote --no-local --tty -h --help --version; do
+             --no-remote --no-local --tty --print-target -h --help --version; do
         grep -qF -- "$f" <<<"$out" || missing="$missing $f"
     done
     [[ -z "$missing" ]] && ok "--help names every required flag" \
@@ -341,6 +343,67 @@ mode_tty() {
 }
 
 #------------------------------------------------------------------------------
+# 9+10. GNU contract: stdout is data only; exit codes documented and distinct.
+#------------------------------------------------------------------------------
+mode_gnu() {
+    head_ "gnu — stdout carries only machine data; exit codes are documented"
+    wipe
+    local out err rc
+    # §1: --print-target piped — stdout must be EXACTLY the target line.
+    out="$(cockpit --print-target 2>/dev/null | cat)"; rc=$?
+    if [[ "$rc" == 0 ]] && grep -qE $'^[^\t]+\t[^\t]+$' <<<"$out" \
+       && [[ "$(grep -c . <<<"$out")" == 1 ]]; then
+        ok "--print-target piped: stdout is exactly one worker<TAB>pane line"
+    elif [[ "$rc" == 66 ]]; then
+        ok "--print-target with no saved target: exit 66, stdout empty (no lie)"
+    else
+        bad "--print-target stdout is not clean single-line data" "rc=$rc [$out]"
+    fi
+    # §1: a build run must put NOTHING on stdout (report goes to stderr).
+    out="$(cockpit --no-remote -s "$SESS" 2>/dev/null)"; rc=$?
+    [[ -z "$out" ]] \
+        && ok "--no-remote build: stdout is empty, the report went to stderr" \
+        || bad "a log/report line leaked to stdout (GNU §1)" "[$out]"
+    wipe
+    # §2: --help documents the exit codes…
+    out="$(cockpit --help 2>&1)"
+    grep -q 'Exit codes:' <<<"$out" && grep -q '64' <<<"$out" \
+        && ok "--help lists the exit codes" \
+        || bad "--help does not document exit codes" "$out"
+    # …and an induced usage error really exits 64.
+    err="$(cockpit --no-such-flag 2>&1)"; rc=$?
+    [[ "$rc" == 64 ]] && grep -q 'E_USAGE' <<<"$err" \
+        && ok "unknown flag -> E_USAGE, exit 64" \
+        || bad "unknown flag should exit 64 with E_USAGE" "rc=$rc $err"
+}
+
+#------------------------------------------------------------------------------
+# 11. completion bash|zsh print non-empty scripts with worker-VALUE completion.
+#------------------------------------------------------------------------------
+mode_completion() {
+    head_ "completion — bash+zsh scripts exist, parse, and complete worker values"
+    local sh out rc
+    for sh in bash zsh; do
+        out="$(cockpit completion "$sh" 2>&1)"; rc=$?
+        [[ "$rc" == 0 && -n "$out" ]] \
+            && ok "completion $sh exits 0 and is non-empty" \
+            || { bad "completion $sh failed" "rc=$rc"; continue; }
+        grep -q -- '--op state' <<<"$out" && grep -q -- '--worker' <<<"$out" \
+            && ok "completion $sh completes worker VALUES from live state" \
+            || bad "completion $sh lacks worker-value completion" "$out"
+        if command -v "$sh" >/dev/null; then
+            "$sh" -n <(printf '%s\n' "$out") 2>/dev/null \
+                && ok "completion $sh parses as valid $sh" \
+                || bad "completion $sh does not parse" ""
+        fi
+    done
+    # an unknown shell is a usage error, not silence
+    out="$(cockpit completion fish 2>&1)"; rc=$?
+    [[ "$rc" == 64 ]] && ok "completion fish -> usage error 64" \
+                      || bad "unknown completion shell should exit 64" "rc=$rc $out"
+}
+
+#------------------------------------------------------------------------------
 # NEGATIVE — every load-bearing assertion above, deliberately broken. An
 # assertion that cannot go red is decoration; this mode watches each one fail.
 # It reports PASS when the underlying check correctly reports a problem.
@@ -466,10 +529,11 @@ MODE="${1:-all}"
 [[ $# -le 1 ]] || { echo "one mode per run (got: $*)" >&2; exit 64; }
 
 case "$MODE" in
-    help|dry|badworker|deadrelay|local|idem|teardown|tty|negative) "mode_$MODE" ;;
+    help|dry|badworker|deadrelay|local|idem|teardown|tty|gnu|completion|negative) "mode_$MODE" ;;
     all) mode_help; mode_dry; mode_badworker; mode_deadrelay
-         mode_local; mode_idem; mode_teardown; mode_tty; mode_negative ;;
-    *) echo "usage: $(basename "$0") [help|dry|badworker|deadrelay|local|idem|teardown|tty|negative|all]" >&2
+         mode_local; mode_idem; mode_teardown; mode_tty; mode_gnu
+         mode_completion; mode_negative ;;
+    *) echo "usage: $(basename "$0") [help|dry|badworker|deadrelay|local|idem|teardown|tty|gnu|completion|negative|all]" >&2
        exit 64 ;;
 esac
 
