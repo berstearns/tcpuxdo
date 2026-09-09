@@ -1,0 +1,25 @@
+# tcpuxdo-worker.service — a USER systemd unit that keeps the WSL worker polling
+# the relay across reboot, sleep and crash. Rendered + installed by
+# setup/windows/Install-Worker-Autostart.sh (it fills __REPO__ and __NAME__).
+#
+# User service on purpose: `systemctl --user restart tcpuxdo-worker` needs NO
+# password, so the girlfriend's Desktop button is sudo-free. Boot-start without
+# a login is provided by lingering (`loginctl enable-linger`), which the
+# installer sets once.
+[Unit]
+Description=tcpuxdo worker (polls the relay, drives local tmux panes)
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+# Source .env exactly as node-up.sh does (handles `export`/quoted values that a
+# bare EnvironmentFile= would choke on), then exec the worker in its place.
+ExecStart=/bin/bash -lc 'cd __REPO__ && set -a && . ./.env && set +a && exec python3 worker.py --name __NAME__ --host "$TCPUX_HOST" --port "$TCPUX_PORT"'
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
