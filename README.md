@@ -187,6 +187,7 @@ Node detail: [docs/onboard-tty-node.md](./docs/onboard-tty-node.md).
 | `tcpuxdo shortcut set NAME -w NODE -p s:w:p` | main | alias a friendly name → (node, pane) |
 | `tcpuxdo allow / block / get` | main | manage the relay's IP allowlist (admin-token gated) |
 | `tcpuxdo doctor` | anywhere | check deps, `.env`, relay reachability |
+| `tcpuxdo prune --dry-run` / `tcpuxdo prune` | main | inspect/remove relay records for workers silent at least 300 seconds; requires admin token |
 
 All config is environment variables, loaded from `.env`. See `.env.example`.
 

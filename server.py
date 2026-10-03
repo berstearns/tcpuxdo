@@ -21,7 +21,7 @@ On success the op either mutates STATE (tmux-panes-update) or gets
 enqueued for the worker. On failure the server responds with a stable
 error code so the sender can cascade programmatically.
 """
-import asyncio, itertools, json, os, time
+import asyncio, hmac, itertools, json, math, os, time
 from collections import deque
 
 import axioms, allowlist
@@ -96,6 +96,7 @@ OP_COLORS = {
     "ack": "magenta", "create-session": "yellow", "create-window": "yellow",
     "create-pane": "yellow", "state": "dim", "capture-pane": "green",
     "shortcut-set": "magenta", "shortcut-del": "magenta", "shortcut-list": "dim",
+    "prune": "magenta",
 }
 
 
@@ -306,6 +307,45 @@ def _op_state(msg, addr):
     return {"ok": True, "state": STATE, "queue": {w: list(q) for w, q in QUEUE.items()}}
 
 
+def _op_prune(msg, addr):
+    """Remove silent workers and their pending jobs; never touch fresh workers."""
+    op = "prune"
+    token = os.environ.get("TCPUX_ADMIN_TOKEN", "")
+    supplied = msg.get("token", "")
+    if not token:
+        return _reject("ADMIN_DISABLED", "TCPUX_ADMIN_TOKEN not set on relay", op, addr)
+    if not isinstance(supplied, str) or not hmac.compare_digest(supplied, token):
+        return _reject("BAD_TOKEN", "admin token mismatch", op, addr)
+    threshold = msg.get("older_than", 300)
+    if isinstance(threshold, bool) or not isinstance(threshold, (int, float)) \
+            or not math.isfinite(threshold) or threshold < 60:
+        return _reject("PRUNE_BAD_AGE", "older_than must be at least 60 seconds", op, addr)
+    worker = msg.get("worker")
+    if worker is not None and (not isinstance(worker, str) or not worker):
+        return _reject("PRUNE_BAD_WORKER", "worker must be a nonempty name", op, addr)
+    now = time.time()
+    selected = {
+        name: {"age_seconds": int(now - rec.get("last_update", 0)),
+               "panes": len(rec.get("panes", {})),
+               "queued": len(QUEUE.get(name, ())),
+               "jobs": sum(d.get("worker") == name for d in DISPATCHED.values())}
+        for name, rec in STATE.items()
+        if (worker is None or name == worker)
+        and now - rec.get("last_update", 0) >= threshold
+    }
+    if not msg.get("dry_run", False):
+        for name in selected:
+            STATE.pop(name, None)
+            QUEUE.pop(name, None)
+        for cid, job in list(DISPATCHED.items()):
+            if job.get("worker") in selected:
+                del DISPATCHED[cid]
+    log("INF", op, f"{'would remove' if msg.get('dry_run') else 'removed'} "
+        f"{len(selected)} stale worker(s) older than {threshold}s", addr)
+    return {"ok": True, "dry_run": bool(msg.get("dry_run")),
+            "older_than": threshold, "workers": selected}
+
+
 def _op_status(msg, addr):
     cmd_id = msg.get("id")
     d = DISPATCHED.get(cmd_id)
@@ -361,6 +401,7 @@ OPS = {
     "poll":              _op_poll,
     "ack":               _op_ack,
     "state":             _op_state,
+    "prune":             _op_prune,
     "status":            _op_status,
     "shortcut-set":      _op_shortcut_set,
     "shortcut-del":      _op_shortcut_del,

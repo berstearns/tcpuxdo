@@ -169,13 +169,17 @@ def main():
     ap.add_argument("--op",    choices=["send-keys", "capture-pane", "create-pane",
                                          "create-window", "create-session", "state",
                                          "status", "shortcut-set", "shortcut-del",
-                                         "shortcut-list"],
+                                         "shortcut-list", "prune"],
                     default="send-keys")
     ap.add_argument("--lines", type=int,
                     help="capture-pane: lines of scrollback to include (default: visible pane)")
     ap.add_argument("--session", help="session id for create-session / create-window")
     ap.add_argument("--window",  help="window id for create-window")
     ap.add_argument("--id",      type=int, help="command id for --op status")
+    ap.add_argument("--older-than", type=int, default=300,
+                    help="prune: minimum seconds since last worker heartbeat (at least 60)")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="prune: show what would be removed")
     args = ap.parse_args()
     if args.port is None:
         ap.error("--port required (or set TCPUX_PORT in env)")
@@ -227,6 +231,13 @@ def main():
                 {"op": "create-session", "worker": args.worker, "session": args.session})
     elif args.op == "state":
         r = rpc(args.host, args.port, {"op": "state"})
+    elif args.op == "prune":
+        token = os.environ.get("TCPUX_ADMIN_TOKEN", "")
+        if not token:
+            ap.error("TCPUX_ADMIN_TOKEN required for prune")
+        r = rpc(args.host, args.port,
+                {"op": "prune", "token": token, "worker": args.worker,
+                 "older_than": args.older_than, "dry_run": args.dry_run})
     elif args.op == "status":
         r = rpc(args.host, args.port, {"op": "status", "id": args.id})
     elif args.op == "shortcut-set":
