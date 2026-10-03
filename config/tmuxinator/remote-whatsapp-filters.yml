@@ -1,0 +1,23 @@
+# Local twin of the whatsapp-filters session on do-app11.
+# The tcpuxdo launcher also repairs existing sessions with missing panes.
+name: remote-whatsapp-filters
+root: /home/b/p/all-my-tiny-projects/weekend-ideas/17.5-create-smarter-whatsapp-filters-based-on-knowledge-about-my-contacts/docs
+
+windows:
+  - cockpit:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T tcx-send; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T tcx-stream; TCX_GROUP=whatsapp-filters bash /home/b/p/tcpuxdo/setup/tcx-stream.sh'
+  - codex-prep-whatsapp-filters:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T remote-manager; exec /home/b/p/tcpuxdo/scripts/AUTO-run-local-codex-agent-in-project-directory.sh whatsapp-filters /home/b/p/all-my-tiny-projects/claude-rules/instructions/whatsapp-filters-local-manager.md'
+        - 'tmux select-pane -t "$TMUX_PANE" -T manager-shell; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T manager-git; exec zsh'
+  - shell:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T sh-send; TCX_GROUP=whatsapp-filters-sh /home/b/p/tcpuxdo/scripts/AUTO-tcx-compose.sh; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T shell-git; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T sh-stream; TCX_GROUP=whatsapp-filters-sh bash /home/b/p/tcpuxdo/setup/tcx-stream.sh'

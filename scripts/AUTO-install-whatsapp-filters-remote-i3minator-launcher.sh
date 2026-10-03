@@ -10,6 +10,8 @@ remote_dir='~/repos/whatsapp-filters/docs'
 local_dir=/home/b/p/all-my-tiny-projects/weekend-ideas/17.5-create-smarter-whatsapp-filters-based-on-knowledge-about-my-contacts/docs
 profiles_file="${TCX_COCKPIT_PROFILES_FILE:-$HOME/.config/tcx-cockpit/profiles.conf}"
 local_dirs_file="${TCX_LOCAL_DIRS:-$HOME/.config/tcx-cockpit/local-dirs.tsv}"
+tmuxinator_dir="${TMUXINATOR_DIR:-$HOME/.config/tmuxinator}"
+tmuxinator_file="$here/../config/tmuxinator/remote-$profile.yml"
 
 while (( $# )); do
     case "$1" in
@@ -22,6 +24,7 @@ done
 [[ "$remote_dir" =~ ^[A-Za-z0-9._~/+-]+$ ]] || { echo "invalid remote directory: $remote_dir" >&2; exit 64; }
 [[ -d "$local_dir" ]] || { echo "local docs directory is missing: $local_dir" >&2; exit 1; }
 [[ -f "$profiles_file" && -f "$local_dirs_file" ]] || { echo "tcpuxdo cockpit config files are missing" >&2; exit 1; }
+[[ -r "$tmuxinator_file" && -d "$tmuxinator_dir" ]] || { echo "tmuxinator template or config directory is missing" >&2; exit 1; }
 
 profile_line="$profile:$worker:$profile:$remote_dir"
 local_line="${profile}"$'\t'"${local_dir}"
@@ -36,5 +39,6 @@ else
     printf '%s\n' "$local_line" >> "$local_dirs_file"
 fi
 
+install -m 644 "$tmuxinator_file" "$tmuxinator_dir/remote-$profile.yml"
 "$here/AUTO-tcx-remote-pair-gen.sh" "$profile"
-echo "installed remote-$profile for $worker:$remote_dir (local $local_dir); no session launched"
+echo "installed remote-$profile i3minator and three-window tmuxinator twin for $worker:$remote_dir (local $local_dir); no session launched"

@@ -103,9 +103,6 @@ respawn(){  # $1 title  $2 command
 }
 respawn tcx-stream "TCX_GROUP=$S bash $HERE/../setup/tcx-stream.sh"
 respawn tcx-send   "TCX_GROUP=$S $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}"
-# Second pair for plain bash: remote terminal in the repo + local window
-# "shell" (sh-send | sh-stream). Idempotent; a failure only warns.
-"$HERE/AUTO-tcx-remote-shell-twin.sh" "$P" || echo "[remote-pair $P] WARN: shell twin not ready — re-run AUTO-tcx-remote-shell-twin.sh $P"
 # Mirror the working remote-wedding-meta local session: cockpit, a manager
 # window with Codex and two shells, and the shell twin window.
 manager_pane="$(pane_by_title remote-manager)"
@@ -137,6 +134,11 @@ if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 3 )); th
 fi
 tmux set-option -w -t "$manager_window" automatic-rename off
 tmux set-option -p -t "$manager_pane" allow-set-title off 2>/dev/null || true
+
+# Second pair for plain bash: remote terminal in the repo + local window
+# "shell" (sh-send | sh-stream). Create the local manager first so a slow
+# remote shell cannot leave the visible twin without its Codex window.
+"$HERE/AUTO-tcx-remote-shell-twin.sh" "$P" || echo "[remote-pair $P] WARN: shell twin not ready — re-run AUTO-tcx-remote-shell-twin.sh $P"
 
 # Finish the local layout before relay checks. A temporary worker failure must
 # not strand this twin with only its cockpit window.
