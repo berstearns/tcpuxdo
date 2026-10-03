@@ -44,7 +44,12 @@ IFS=':' read -r _ W S _ <<<"$line"
 # prompts, so it never blocks on a dialog nobody is watching on the worker
 # (2026-10-02, Bernardo: a remote pair stuck on "Do you want to proceed?" is a
 # failed setup). Override per launch with TCX_COCKPIT_CLAUDE_CMD.
-export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
+if [[ "$P" == rag-papers-gcp-repo ]]; then
+    instruction_url="https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/rag-papers-gcp-repo-remote-worker.md"
+    export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions \"Read $instruction_url and follow it. Report if you cannot read it.\"}"
+else
+    export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
+fi
 # The LOCAL twin session is named like the launcher: remote-<profile>
 # (2026-10-03, Bernardo: every twin session must carry the remote- prefix).
 LS="remote-$P"
