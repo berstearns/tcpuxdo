@@ -18,7 +18,12 @@
 set -uo pipefail
 REPO="${TCPUXDO_DIR:-$HOME/tcpuxdo}"
 STATUS=0; [ "${1:-}" = "--status" ] && STATUS=1
-NAME="$( [ -f "$REPO/.env" ] && (set -a; . "$REPO/.env"; set +a; echo "${TCPUX_WORKER:-$(hostname)}") || hostname )"
+if [ -f "$REPO/.env" ]; then
+  # shellcheck disable=SC1091 # Node-specific, git-ignored config.
+  NAME="$(set -a; . "$REPO/.env"; set +a; echo "${TCPUX_WORKER:-$(hostname)}")"
+else
+  NAME="$(hostname)"
+fi
 UNIT_DIR="$HOME/.config/systemd/user"
 UNIT="$UNIT_DIR/tcpuxdo-worker.service"
 
@@ -55,8 +60,12 @@ systemctl --user enable --now tcpuxdo-worker.service || { echo "INSTALL_RESULT=2
 # Linger = start the user manager (and this service) at boot without a login.
 # The only sudo in the whole design, and only here, once.
 if [ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null)" != "yes" ]; then
-  echo "enabling linger (one sudo prompt) so the worker starts before you log in…"
-  sudo loginctl enable-linger "$USER" || echo "  (linger not set — worker still runs while logged in)"
+  if [ -n "${RESCUE_NONINTERACTIVE:-}" ]; then
+    sudo -n loginctl enable-linger "$USER" 2>/dev/null || echo "  (linger not set — worker still runs while logged in)"
+  else
+    echo "enabling linger (one sudo prompt) so the worker starts before you log in…"
+    sudo loginctl enable-linger "$USER" || echo "  (linger not set — worker still runs while logged in)"
+  fi
 fi
 
 sleep 3

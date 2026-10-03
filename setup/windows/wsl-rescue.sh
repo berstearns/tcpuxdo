@@ -54,13 +54,13 @@ verdict_bad(){ echo; echo "=================================================="; 
 echo "tcpuxdo WSL rescue — $STAMP — user $(whoami) on $(hostname)"
 
 # 1 — tools
-missing=""
-for c in git python3 tmux curl; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
-if [ -n "$missing" ]; then
-    say "missing:$missing — trying to install (only works without a password)"
-    sudo -n apt-get update -qq >/dev/null 2>&1 && sudo -n apt-get install -y -qq $missing >/dev/null 2>&1
-    missing=""; for c in git python3 tmux curl; do command -v "$c" >/dev/null 2>&1 || missing="$missing $c"; done
-    [ -z "$missing" ] || verdict_bad "programs missing:$missing  (fix: sudo apt-get install -y$missing)"
+missing=()
+for c in git python3 tmux curl; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
+if [ "${#missing[@]}" -gt 0 ]; then
+    say "missing: ${missing[*]} — trying to install (only works without a password)"
+    sudo -n apt-get update -qq >/dev/null 2>&1 && sudo -n apt-get install -y -qq "${missing[@]}" >/dev/null 2>&1
+    missing=(); for c in git python3 tmux curl; do command -v "$c" >/dev/null 2>&1 || missing+=("$c"); done
+    [ "${#missing[@]}" -eq 0 ] || verdict_bad "programs missing: ${missing[*]} (needs: sudo apt-get install -y ${missing[*]})"
 fi
 ok "programs: git python3 tmux curl"
 
@@ -117,7 +117,10 @@ if [ "$DIR" != "$HOME/tcpuxdo" ] && [ ! -e "$HOME/tcpuxdo" ]; then
 fi
 
 # 6 — ask the relay directly, print its exact answer
-set -a; . ./.env; set +a
+set -a
+# shellcheck disable=SC1091 # Node-specific, git-ignored config.
+. ./.env
+set +a
 PUBIP="$(curl -fsS --max-time 8 https://api.ipify.org 2>/dev/null || echo unknown)"
 say "this machine's public IP: $PUBIP"
 RELAY_SAYS="$(PYTHONPATH="$DIR" TCPUX_CONNECT_RETRY_SECS=20 python3 - <<'PY' 2>&1
@@ -144,23 +147,30 @@ ok "server reachable and accepts this machine"
 [ -n "${RESCUE_STOP_BEFORE_BRINGUP:-}" ] && verdict_ok "TEST MODE — stopped before bring-up"
 
 # 7 — bring the worker up and wait for it to register
-out="$(TCPUXDO_DIR="$DIR" bash setup/windows/AUTO-worker-bringup.sh 2>&1)"; echo "$out" | sed 's/^/    /'
+out="$(TCPUXDO_DIR="$DIR" bash setup/windows/AUTO-worker-bringup.sh 2>&1)"
+printf '%s\n' "$out" | awk '{print "    " $0}'
 code="$(echo "$out" | grep -o 'BRINGUP_RESULT=[0-9]*' | tail -1 | cut -d= -f2)"
 for _ in 1 2 3 4; do
     [ "$code" = 0 ] && break
     [ "$code" = 10 ] || break
     sleep 15
     out="$(TCPUXDO_DIR="$DIR" bash setup/windows/AUTO-worker-bringup.sh --status 2>&1)"
+    printf '%s\n' "$out" | awk '{print "    " $0}'
     code="$(echo "$out" | grep -o 'BRINGUP_RESULT=[0-9]*' | tail -1 | cut -d= -f2)"
 done
 
 # 8 — autostart (best effort, never blocks the verdict)
 if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ]; then
-    bash setup/windows/Install-Worker-Autostart.sh >/dev/null 2>&1 && say "autostart installed" || say "autostart not installed (ok)"
+    if RESCUE_NONINTERACTIVE=1 bash setup/windows/Install-Worker-Autostart.sh >/dev/null 2>&1; then
+        say "autostart installed"
+    else
+        say "autostart not installed (worker is connected)"
+    fi
 fi
 
 case "$code" in
     0)  verdict_ok "worker $WNAME" ;;
     10) verdict_bad "worker started but not registered after 1 minute (code 10)" ;;
+    20) verdict_bad "worker cannot reach or was rejected by relay (code 20); public IP $PUBIP may need allowing" ;;
     *)  verdict_bad "bring-up code ${code:-none}: $(echo "$out" | grep -o 'BRINGUP_MSG=.*' | tail -1 | cut -d= -f2-)" ;;
 esac
