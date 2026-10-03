@@ -2,9 +2,9 @@
 # WSL worker watchdog. The person at the WSL laptop runs exactly one command:
 #   curl -fsSL https://raw.githubusercontent.com/berstearns/tcpuxdo/master/setup/windows/wsl-watch.sh | bash
 # Leave that terminal open. Each pass downloads the latest copy of this script
-# and the latest rescue from GitHub. Rescue updates the local checkout, repairs
-# the worker, and verifies a fresh heartbeat with the relay. No admin token is
-# needed on the node. A failed pass is retried until the link works.
+# and the latest rescue from GitHub. Rescue updates tcpuxdo and credpipe,
+# repairs the worker, and verifies both the relay probe and credpipe pull.
+# No admin token is needed on the node. A failed pass is retried.
 set -uo pipefail
 
 BASE=https://raw.githubusercontent.com/berstearns/tcpuxdo/master/setup/windows
@@ -45,13 +45,14 @@ while :; do
     rc=$?
     if [ "$rc" -eq 0 ]; then
       proof="$(printf '%s\n' "$out" | grep 'PROBE_OK ' | tail -1)"
-      if [ -n "$proof" ]; then
+      credpipe="$(printf '%s\n' "$out" | grep 'CREDPIPE_OK ' | tail -1)"
+      if [ -n "$proof" ] && [ -n "$credpipe" ]; then
         changed="$(printf '%s\n' "$out" | grep 'CODE_CHANGED ' | tail -1)"
         [ -z "$changed" ] || printf '%s\n' "$changed"
-        printf '%s  %s; checking again in %ss\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$proof" "$INTERVAL"
+        printf '%s  %s; %s; checking again in %ss\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$proof" "$credpipe" "$INTERVAL"
       else
         printf '%s\n' "$out"
-        echo "Probe result missing; retrying after ${INTERVAL}s."
+        echo "Relay or credpipe proof missing; retrying after ${INTERVAL}s."
       fi
     else
       printf '%s\n' "$out"

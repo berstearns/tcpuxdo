@@ -19,7 +19,8 @@
 #               rejection code like N1_IP_NOT_ALLOWED + this machine's public IP
 #            7. starts/restarts the main worker and waits for a heartbeat
 #            8. runs an isolated dummy worker/pane send-and-read probe
-#            9. best effort: installs the autostart service
+#            9. updates credpipe, pulls and verifies fresh Claude credentials
+#           10. best effort: installs the autostart service
 #
 # WHY:     2026-10-03: the wsl- worker had been silent 24 days. Bernardo has no
 #          access to that machine and the person there is not technical: a
@@ -56,7 +57,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 say(){ echo "  · $*"; }
 ok(){ echo "  ✓ $*"; }
-verdict_ok(){ echo; echo "=================================================="; echo " RESULT: OK — $*"; echo " You can close this window."; echo "=================================================="; exit 0; }
+verdict_ok(){ echo; echo "=================================================="; echo " RESULT: OK — $*"; echo " Leave the watch window open for the next check."; echo "=================================================="; exit 0; }
 verdict_bad(){ echo; echo "=================================================="; echo " RESULT: PROBLEM — $*"; echo " Take a photo of THIS screen and send it to Bernardo."; echo " (log file: $LOG)"; echo "=================================================="; exit 1; }
 
 echo "tcpuxdo WSL rescue — $STAMP — user $(whoami) on $(hostname)"
@@ -196,7 +197,15 @@ if probe_out="$(python3 setup/windows/wsl-probe.py 2>&1)"; then
 fi
 printf '%s\n' "$probe_out" | awk '{print "    " $0}'
 
-# 9 — autostart (best effort, never blocks the verdict)
+# 9 — credpipe is part of a usable Claude worker. Pull on every pass because
+# OAuth credentials can change even when neither Git checkout has changed.
+credpipe_code=1
+if credpipe_out="$(TCPUX_RELAY_HOST="${TCPUX_HOST:-}" bash setup/windows/wsl-credpipe-rescue.sh 2>&1)"; then
+    credpipe_code=0
+fi
+printf '%s\n' "$credpipe_out" | awk '{print "    " $0}'
+
+# 10 — autostart (best effort, never blocks the verdict)
 if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ] \
    && ! systemctl --user cat tcpuxdo-worker.service >/dev/null 2>&1; then
     if RESCUE_NONINTERACTIVE=1 bash setup/windows/Install-Worker-Autostart.sh >/dev/null 2>&1; then
@@ -207,10 +216,12 @@ if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ] \
 fi
 
 case "$code" in
-    0)  if [ "$probe_code" -eq 0 ]; then
-            verdict_ok "isolated relay/tmux probe passed (main worker $WNAME)"
-        else
+    0)  if [ "$probe_code" -ne 0 ]; then
             verdict_bad "main worker is fresh, but dummy relay/tmux probe failed"
+        elif [ "$credpipe_code" -ne 0 ]; then
+            verdict_bad "tcpuxdo works, but credpipe could not install fresh Claude credentials (see CREDPIPE_PROBLEM above)"
+        else
+            verdict_ok "worker $WNAME relay probe passed and credpipe credentials were pulled"
         fi ;;
     10) verdict_bad "worker started but not registered after 1 minute (code 10)" ;;
     20) verdict_bad "worker cannot reach or was rejected by relay (code 20); public IP $PUBIP may need allowing" ;;
