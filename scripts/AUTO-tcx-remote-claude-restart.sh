@@ -40,6 +40,10 @@ while [[ "${1:-}" == -* ]]; do case "$1" in
     *) echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64 ;;
 esac; shift; done
 P="${1:-}"; [[ -n "$P" ]] || { echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64; }
+PROMPT=""
+if [[ "$P" == rag-papers-gcp-repo ]]; then
+    PROMPT=' "Read https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/rag-papers-gcp-repo-remote-worker.md and follow it. Report if you cannot read it."'
+fi
 for c in jq timeout; do command -v "$c" >/dev/null || { echo "missing $c" >&2; exit 64; }; done
 
 line="$(grep -v '^[[:space:]]*#' "$CONF" | grep -m1 "^${P}:")" || { echo "no profile '$P' in $CONF" >&2; exit 64; }
@@ -56,7 +60,7 @@ send(){  # $1 = literal text; tcpuxdo appends Enter
 fg_cmd(){ timeout 15 "$TCPUXDO" --op state 2>/dev/null \
     | jq -r --arg w "$W" --arg p "$PANE" '.state[$w].panes[$p].cmd // "?"'; }
 
-LAUNCH="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; cd ${D} && exec ${CMD}${CONT}'"
+LAUNCH="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; cd ${D} && exec ${CMD}${CONT}${PROMPT}'"
 
 send $'\e' || verdict FAIL "Esc not queued (relay?)"
 sleep 2
@@ -70,4 +74,4 @@ done
 
 send "$LAUNCH" || verdict FAIL "launch line not queued"
 "$HERE/AUTO-tcx-remote-trust.sh" "$W" "$PANE" || verdict FAIL "claude did not reach its input box"
-verdict OK "$W $PANE runs: ${CMD}${CONT}"
+verdict OK "$W $PANE runs: ${CMD}${CONT}${PROMPT}"
