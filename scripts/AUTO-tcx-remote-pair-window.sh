@@ -44,7 +44,7 @@ IFS=':' read -r _ W S _ <<<"$line"
 # prompts, so it never blocks on a dialog nobody is watching on the worker
 # (2026-10-02, Bernardo: a remote pair stuck on "Do you want to proceed?" is a
 # failed setup). Override per launch with TCX_COCKPIT_CLAUDE_CMD.
-if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta ]]; then
+if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta || "$P" == whatsapp-filters ]]; then
     export TCX_COCKPIT_REMOTE_INSTRUCTION_FILE="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P-remote-worker.md"
 fi
 export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"

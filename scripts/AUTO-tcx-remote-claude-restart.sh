@@ -42,7 +42,7 @@ esac; shift; done
 P="${1:-}"; [[ -n "$P" ]] || { echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64; }
 PROMPT=""
 INSTRUCTION_SETUP=""
-if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta ]]; then
+if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta || "$P" == whatsapp-filters ]]; then
     instruction_file="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P-remote-worker.md"
     [[ -s "$instruction_file" ]] || { echo "remote instruction .md missing: $instruction_file" >&2; exit 1; }
     command -v base64 >/dev/null || { echo "base64 is needed to copy the instruction .md to the worker" >&2; exit 64; }
