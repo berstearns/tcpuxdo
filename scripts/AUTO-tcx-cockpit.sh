@@ -658,8 +658,21 @@ remote_half() {
         # PATH and depends on no rc file at all.
         # The profile can outlive the worker filesystem (for example after a
         # WSL reset). Recreate its project directory on every fresh launch.
-        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; mkdir -p ${CONFIG[dir]} && cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
-        step "remote: send-keys \"$launch\" -> $w $pane"
+        local instruction_setup="" instruction_prompt="" instruction_file="${TCX_COCKPIT_REMOTE_INSTRUCTION_FILE:-}" instruction_target payload
+        if [[ -n "$instruction_file" ]]; then
+            [[ -s "$instruction_file" ]] || die E_INSTRUCTION_MISSING "remote instruction .md missing: $instruction_file" 1
+            command -v base64 >/dev/null || die E_MISSING_DEP "base64 is needed to copy the instruction .md to the worker" 1
+            payload="$(base64 -w0 "$instruction_file")" || die E_INSTRUCTION_READ "could not read $instruction_file" 1
+            instruction_target="/tmp/tcpuxdo-${CONFIG[profile]}-remote-worker.md"
+            instruction_setup="printf %s $payload | base64 -d > $instruction_target && "
+            instruction_prompt=" \"Read $instruction_target and follow it. Report if you cannot read it.\""
+        fi
+        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; mkdir -p ${CONFIG[dir]} && cd ${CONFIG[dir]} && ${instruction_setup}exec ${CONFIG[claude_cmd]}${instruction_prompt}'"
+        if [[ -n "$instruction_file" ]]; then
+            step "remote: copy $(basename "$instruction_file") and launch Claude -> $w $pane"
+        else
+            step "remote: send-keys \"$launch\" -> $w $pane"
+        fi
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
             -c "$launch" >/dev/null \
             || die E_SEND_FAILED "send-keys into $w $pane was rejected (busy pane? SK5) — check:

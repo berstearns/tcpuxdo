@@ -2,7 +2,6 @@
 # Run the local Codex agent for one remote-twin profile in its local project dir.
 # Invoked as the command of that twin's visible "codex" tmux window.
 set -uo pipefail
-here="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
 profile="${1:-}"
 dirs="${TCX_LOCAL_DIRS:-$HOME/.config/tcx-cockpit/local-dirs.tsv}"
 project_dir="$(awk -F '\t' -v p="$profile" '$1==p {print $2; exit}' "$dirs" 2>/dev/null)"
@@ -20,8 +19,8 @@ case "$profile" in
     rag-papers-gcp-repo|wedding-meta)
         instruction="${2:-/home/b/p/all-my-tiny-projects/claude-rules/instructions/$profile-local-manager.md}" ;;
     *)
-        instruction="${2:-$here/prompts/$profile-local-manager.md}"
-        [[ -s "$instruction" ]] || instruction="$here/prompts/remote-twin-local-manager.md" ;;
+        instruction="${2:-/home/b/p/all-my-tiny-projects/claude-rules/instructions/$profile-local-manager.md}"
+        [[ -s "$instruction" ]] || instruction="/home/b/p/all-my-tiny-projects/claude-rules/instructions/remote-twin-local-manager.md" ;;
 esac
 if [[ ! -s "$instruction" ]]; then
     echo "local Codex instruction .md is missing: $instruction"
