@@ -49,4 +49,5 @@ if ! jq -e --arg worker "$worker" --arg prefix "$remote_session:" '
 fi
 
 echo "remote tmux session '$remote_session' is live on '$worker'; opening local 'remote-$PROFILE'"
+export TCX_COCKPIT_REQUIRE_EXISTING_REMOTE=1
 exec "$HERE/AUTO-create-or-reuse-and-enter-local-tmux-session-for-remote-twin.sh" "$PROFILE"

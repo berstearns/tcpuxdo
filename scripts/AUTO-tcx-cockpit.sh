@@ -594,6 +594,8 @@ remote_half() {
     existing="$(session_panes "$w" "$s")"
 
     if [[ -z "$existing" ]]; then
+        [[ "${TCX_COCKPIT_REQUIRE_EXISTING_REMOTE:-0}" != 1 ]] || die E_REMOTE_SESSION_MISSING \
+            "existing-remote-only launch: session '$s' is absent on worker '$w'; no remote session was created" 3
         step "remote: create-session $s on $w"
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --op create-session --worker "$w" --session "$s" >/dev/null \
             || die E_CREATE_SESSION "create-session '$s' on '$w' was rejected — run it by hand to see the axiom:
