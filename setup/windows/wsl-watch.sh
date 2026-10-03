@@ -44,7 +44,15 @@ while :; do
     out="$(bash "$latest" --once 2>&1)"
     rc=$?
     if [ "$rc" -eq 0 ]; then
-      printf '%s  worker connected; checking again in %ss\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$INTERVAL"
+      proof="$(printf '%s\n' "$out" | grep 'PROBE_OK ' | tail -1)"
+      if [ -n "$proof" ]; then
+        changed="$(printf '%s\n' "$out" | grep 'CODE_CHANGED ' | tail -1)"
+        [ -z "$changed" ] || printf '%s\n' "$changed"
+        printf '%s  %s; checking again in %ss\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$proof" "$INTERVAL"
+      else
+        printf '%s\n' "$out"
+        echo "Probe result missing; retrying after ${INTERVAL}s."
+      fi
     else
       printf '%s\n' "$out"
       printf '%s  recovery failed (exit %s); retrying in %ss\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$rc" "$INTERVAL"

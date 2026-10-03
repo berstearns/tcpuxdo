@@ -9,9 +9,12 @@ curl -fsSL https://raw.githubusercontent.com/berstearns/tcpuxdo/master/setup/win
 ```
 
 Every minute, the watcher fetches its latest version and the latest rescue
-script from GitHub. Rescue updates the local checkout, checks the relay's
-heartbeat for `wsl-`, and restarts the worker when needed. A new GitHub commit
-also reloads the worker code. Failures print a reason and retry; the full log
+script from GitHub. Rescue updates the local checkout and restarts both WSL
+workers after a new commit. The `wsl-probe` worker has its own relay queue and
+a disposable `tcpuxdo-probe` tmux shell. A successful pass sends a unique marker
+through that worker and reads it back from the shell. The output also shows the
+main `wsl-` queue depth, since an old backlog can still block real work even
+when the isolated probe passes. Failures print a reason and retry; the full log
 is `~/tcpuxdo-rescue-watch.log`. The loop runs while this WSL session stays up.
 
 When the laptop (m2) worker dies, only something running **on m2** can restart

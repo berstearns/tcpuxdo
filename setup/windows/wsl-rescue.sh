@@ -17,8 +17,9 @@
 #            5. links ~/tcpuxdo → that checkout (so the Desktop button works later)
 #            6. asks the relay directly and PRINTS the exact answer — including a
 #               rejection code like N1_IP_NOT_ALLOWED + this machine's public IP
-#            7. runs setup/windows/AUTO-worker-bringup.sh and waits for "connected"
-#            8. best effort: installs the autostart service
+#            7. starts/restarts the main worker and waits for a heartbeat
+#            8. runs an isolated dummy worker/pane send-and-read probe
+#            9. best effort: installs the autostart service
 #
 # WHY:     2026-10-03: the wsl- worker had been silent 24 days. Bernardo has no
 #          access to that machine and the person there is not technical: a
@@ -49,7 +50,7 @@ exec > >(tee -a "$LOG") 2>&1
 
 say(){ echo "  · $*"; }
 ok(){ echo "  ✓ $*"; }
-verdict_ok(){ echo; echo "=================================================="; echo " RESULT: OK — connected ($*)"; echo " You can close this window."; echo "=================================================="; exit 0; }
+verdict_ok(){ echo; echo "=================================================="; echo " RESULT: OK — $*"; echo " You can close this window."; echo "=================================================="; exit 0; }
 verdict_bad(){ echo; echo "=================================================="; echo " RESULT: PROBLEM — $*"; echo " Take a photo of THIS screen and send it to Bernardo."; echo " (log file: $LOG)"; echo "=================================================="; exit 1; }
 
 echo "tcpuxdo WSL rescue — $STAMP — user $(whoami) on $(hostname)"
@@ -98,7 +99,10 @@ git fetch -q origin master || verdict_bad "could not update from GitHub (interne
 git checkout -q master 2>/dev/null || git checkout -q -b master origin/master || verdict_bad "git checkout master failed"
 git reset -q --hard origin/master || verdict_bad "git update failed"
 NEW_SHA="$(git rev-parse HEAD)"
-[ "$OLD_SHA" = "$NEW_SHA" ] || export RESCUE_FORCE_RESTART=1
+if [ "$OLD_SHA" != "$NEW_SHA" ]; then
+    export RESCUE_FORCE_RESTART=1
+    echo "CODE_CHANGED $(git rev-parse --short HEAD) — relaunching main and probe workers"
+fi
 ok "code updated to $(git rev-parse --short HEAD) (GitHub master)"
 
 # 4 — .env
@@ -167,7 +171,15 @@ for _ in 1 2 3 4; do
     code="$(echo "$out" | grep -o 'BRINGUP_RESULT=[0-9]*' | tail -1 | cut -d= -f2)"
 done
 
-# 8 — autostart (best effort, never blocks the verdict)
+# 8 — a separate worker/queue drives a disposable shell and reads its output.
+# Check it even when the main worker fails: that distinguishes the two paths.
+probe_code=1
+if probe_out="$(python3 setup/windows/wsl-probe.py 2>&1)"; then
+    probe_code=0
+fi
+printf '%s\n' "$probe_out" | awk '{print "    " $0}'
+
+# 9 — autostart (best effort, never blocks the verdict)
 if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ] \
    && ! systemctl --user cat tcpuxdo-worker.service >/dev/null 2>&1; then
     if RESCUE_NONINTERACTIVE=1 bash setup/windows/Install-Worker-Autostart.sh >/dev/null 2>&1; then
@@ -178,7 +190,11 @@ if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ] \
 fi
 
 case "$code" in
-    0)  verdict_ok "worker $WNAME" ;;
+    0)  if [ "$probe_code" -eq 0 ]; then
+            verdict_ok "isolated relay/tmux probe passed (main worker $WNAME)"
+        else
+            verdict_bad "main worker is fresh, but dummy relay/tmux probe failed"
+        fi ;;
     10) verdict_bad "worker started but not registered after 1 minute (code 10)" ;;
     20) verdict_bad "worker cannot reach or was rejected by relay (code 20); public IP $PUBIP may need allowing" ;;
     *)  verdict_bad "bring-up code ${code:-none}: $(echo "$out" | grep -o 'BRINGUP_MSG=.*' | tail -1 | cut -d= -f2-)" ;;
