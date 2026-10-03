@@ -691,7 +691,9 @@ save_target() {  # $1 worker  $2 pane
 # indexes re-map on every split, and the pane that ends up at .1 after a split
 # is not the pane that was there before it (~/.claude/rules/tmux-pane-routing.md).
 # ============================================================================
-local_session_name() { printf '%s-cockpit\n' "${CONFIG[session]}"; }
+# TCX_COCKPIT_LOCAL_SESSION overrides the local name (the remote-<profile>
+# i3minator pairs use "remote-<profile>" so every twin is findable by prefix).
+local_session_name() { printf '%s\n' "${TCX_COCKPIT_LOCAL_SESSION:-${CONFIG[session]}-cockpit}"; }
 
 session_exists() { tmux has-session -t "=$1" 2>/dev/null; }
 

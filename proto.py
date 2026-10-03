@@ -7,7 +7,7 @@ Shared state:      none — each connection owns its reader/writer pair
 
 Wire format: [4-byte big-endian length][JSON body]
 """
-import asyncio, json, socket, struct
+import asyncio, json, os, socket, struct, time
 
 
 MAX_FRAME = 1 * 1024 * 1024
@@ -65,10 +65,33 @@ def _recv_exact(s, n):
     return buf
 
 
+# Retry window for the TCP CONNECT only. 2026-10-03: on a flapping home uplink
+# (gateway fine, internet gone ~60% of 2s probes, relay AND github alike) every
+# send died with "OSError: [Errno 113] No route to host". A failed connect has
+# sent nothing, so retrying it can never duplicate an op. Errors after connect
+# are NOT retried. 0 disables. Env: TCPUX_CONNECT_RETRY_SECS (default 30).
+CONNECT_RETRY_SECS = float(os.environ.get("TCPUX_CONNECT_RETRY_SECS", "30"))
+
+
+def _connect(host, port, timeout):
+    deadline = time.monotonic() + CONNECT_RETRY_SECS
+    delay = 0.5
+    while True:
+        s = socket.socket()
+        s.settimeout(timeout)
+        try:
+            s.connect((host, port))
+            return s
+        except OSError:
+            s.close()
+            if time.monotonic() + delay > deadline:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+
+
 def rpc(host, port, msg, timeout=10):
-    s = socket.socket()
-    s.settimeout(timeout)
-    s.connect((host, port))
+    s = _connect(host, port, timeout)
     try:
         data = json.dumps(msg).encode()
         s.sendall(struct.pack("!I", len(data)) + data)
