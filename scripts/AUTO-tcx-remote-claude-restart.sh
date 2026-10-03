@@ -41,8 +41,8 @@ while [[ "${1:-}" == -* ]]; do case "$1" in
 esac; shift; done
 P="${1:-}"; [[ -n "$P" ]] || { echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64; }
 PROMPT=""
-if [[ "$P" == rag-papers-gcp-repo ]]; then
-    PROMPT=' "Read https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/rag-papers-gcp-repo-remote-worker.md and follow it. Report if you cannot read it."'
+if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta ]]; then
+    PROMPT=" \"Read https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/$P-remote-worker.md and follow it. Report if you cannot read it.\""
 fi
 for c in jq timeout; do command -v "$c" >/dev/null || { echo "missing $c" >&2; exit 64; }; done
 

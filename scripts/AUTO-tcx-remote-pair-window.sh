@@ -44,8 +44,8 @@ IFS=':' read -r _ W S _ <<<"$line"
 # prompts, so it never blocks on a dialog nobody is watching on the worker
 # (2026-10-02, Bernardo: a remote pair stuck on "Do you want to proceed?" is a
 # failed setup). Override per launch with TCX_COCKPIT_CLAUDE_CMD.
-if [[ "$P" == rag-papers-gcp-repo ]]; then
-    instruction_url="https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/rag-papers-gcp-repo-remote-worker.md"
+if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta ]]; then
+    instruction_url="https://raw.githubusercontent.com/berstearns/tcpuxdo/master/scripts/prompts/$P-remote-worker.md"
     export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions \"Read $instruction_url and follow it. Report if you cannot read it.\"}"
 else
     export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
