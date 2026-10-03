@@ -76,11 +76,16 @@ case "$age" in
   down:*) done_ 20 "Can't reach the server ($age). Check WiFi / VPN, then click again." ;;
   rejected:*) done_ 20 "Server rejected this machine ($age). Send this screen to Bernardo." ;;
   never) say "relay OK; worker '$NAME' not registered yet" ;;
-  *)     if [ "$age" -le "$FRESH" ]; then
+  *)     if [ "$age" -le "$FRESH" ] && [ -z "${RESCUE_FORCE_RESTART:-}" ]; then
            say "✓ worker '$NAME' already connected (${age}s ago)"
            done_ 0 "Already connected. Nothing to do."
          fi
-         say "relay OK; worker '$NAME' stale (${age}s) — will restart" ;;
+         if [ -n "${RESCUE_FORCE_RESTART:-}" ]; then
+           say "code changed on GitHub — restarting worker to load it"
+         else
+           say "relay OK; worker '$NAME' stale (${age}s) — will restart"
+         fi
+         ;;
 esac
 
 if [ "$STATUS_ONLY" -eq 1 ]; then

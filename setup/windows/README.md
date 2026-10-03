@@ -1,5 +1,19 @@
 # Windows / WSL worker — the double-click reconnect button
 
+## One-command live repair from WSL
+
+Paste this once in a WSL terminal and leave that terminal open:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/berstearns/tcpuxdo/master/setup/windows/wsl-watch.sh | bash
+```
+
+Every minute, the watcher fetches its latest version and the latest rescue
+script from GitHub. Rescue updates the local checkout, checks the relay's
+heartbeat for `wsl-`, and restarts the worker when needed. A new GitHub commit
+also reloads the worker code. Failures print a reason and retry; the full log
+is `~/tcpuxdo-rescue-watch.log`. The loop runs while this WSL session stays up.
+
 When the laptop (m2) worker dies, only something running **on m2** can restart
 it — tcpuxdo never pushes to nodes over the network. This folder turns that
 restart into a Desktop double-click a non-technical person can run, and a

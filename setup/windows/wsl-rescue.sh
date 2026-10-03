@@ -31,7 +31,8 @@
 #          env TCPUX_WORKER worker name to ensure (default wsl-)
 #          env RESCUE_STOP_BEFORE_BRINGUP=1  test mode: steps 1-6 only, no worker
 #          env RESCUE_REPO_URL  clone source (tests: a local path)
-# OUTPUTS: a log ~/tcpuxdo-rescue-<stamp>.log ; last screen = verdict:
+# OUTPUTS: a log ~/tcpuxdo-rescue-<stamp>.log (or RESCUE_LOG_FILE);
+#          last screen = verdict:
 #            "RESULT: OK — connected"   or   "RESULT: PROBLEM — <reason>"
 #          exit 0 connected · 1 problem
 # SECRETS: none. The relay address is NOT in this public file; the admin token
@@ -43,7 +44,7 @@ RELAY_ARG="${1:-}"
 WNAME="${TCPUX_WORKER:-wsl-}"
 REPO_URL="${RESCUE_REPO_URL:-https://github.com/berstearns/tcpuxdo.git}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-LOG="$HOME/tcpuxdo-rescue-$STAMP.log"
+LOG="${RESCUE_LOG_FILE:-$HOME/tcpuxdo-rescue-$STAMP.log}"
 exec > >(tee -a "$LOG") 2>&1
 
 say(){ echo "  · $*"; }
@@ -84,13 +85,20 @@ ok "tcpuxdo folder: $DIR"
 
 # 3 — latest master (never lose local edits: stash them)
 cd "$DIR" || verdict_bad "cannot enter $DIR"
-git remote get-url origin >/dev/null 2>&1 || git remote add origin "$REPO_URL"
+if git remote get-url origin >/dev/null 2>&1; then
+    git remote set-url origin "$REPO_URL" || verdict_bad "could not set GitHub source"
+else
+    git remote add origin "$REPO_URL" || verdict_bad "could not set GitHub source"
+fi
+OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 if [ -n "$(git status --porcelain --untracked-files=no 2>/dev/null)" ]; then
     git stash push -q -m "wsl-rescue-$STAMP" && say "local edits saved in: git stash (wsl-rescue-$STAMP)"
 fi
 git fetch -q origin master || verdict_bad "could not update from GitHub (internet?)"
 git checkout -q master 2>/dev/null || git checkout -q -b master origin/master || verdict_bad "git checkout master failed"
 git reset -q --hard origin/master || verdict_bad "git update failed"
+NEW_SHA="$(git rev-parse HEAD)"
+[ "$OLD_SHA" = "$NEW_SHA" ] || export RESCUE_FORCE_RESTART=1
 ok "code updated to $(git rev-parse --short HEAD) (GitHub master)"
 
 # 4 — .env
@@ -160,7 +168,8 @@ for _ in 1 2 3 4; do
 done
 
 # 8 — autostart (best effort, never blocks the verdict)
-if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ]; then
+if [ "$code" = 0 ] && [ -f setup/windows/Install-Worker-Autostart.sh ] \
+   && ! systemctl --user cat tcpuxdo-worker.service >/dev/null 2>&1; then
     if RESCUE_NONINTERACTIVE=1 bash setup/windows/Install-Worker-Autostart.sh >/dev/null 2>&1; then
         say "autostart installed"
     else
