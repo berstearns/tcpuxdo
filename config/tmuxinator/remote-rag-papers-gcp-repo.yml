@@ -1,0 +1,23 @@
+# Local twin of the rag-papers-gcp-repo session on wsl-.
+# The tcpuxdo launcher also repairs existing sessions with missing panes.
+name: remote-rag-papers-gcp-repo
+root: /home/b/p/all-my-tiny-projects/playground/naked-gcp/rag-papers-gcp-repo
+
+windows:
+  - cockpit:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T tcx-send; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T tcx-stream; TCX_GROUP=rag-papers-gcp-repo bash /home/b/p/tcpuxdo/setup/tcx-stream.sh'
+  - codex-prep-rag-papers-gcp-repo:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T remote-manager; exec /home/b/p/tcpuxdo/scripts/AUTO-run-local-codex-agent-in-project-directory.sh rag-papers-gcp-repo'
+        - 'tmux select-pane -t "$TMUX_PANE" -T manager-shell; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T manager-git; exec zsh'
+  - shell:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "$TMUX_PANE" -T sh-send; TCX_GROUP=rag-papers-gcp-repo-sh /home/b/p/tcpuxdo/scripts/AUTO-tcx-compose.sh; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T shell-git; exec zsh'
+        - 'tmux select-pane -t "$TMUX_PANE" -T sh-stream; TCX_GROUP=rag-papers-gcp-repo-sh bash /home/b/p/tcpuxdo/setup/tcx-stream.sh'

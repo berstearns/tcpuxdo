@@ -59,6 +59,34 @@ GT="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/$G/target"
 out(){ printf 'shell-twin\t%s\t%s\t%s\n' "$P" "$1" "$2"; [[ "$1" == OK ]]; }
 tmux has-session -t "=$LS" 2>/dev/null || { out FAIL "no local session $LS — launch remote-$P first"; exit 64; }
 
+# Build the local shell window first, so a worker outage does not leave the
+# local twin with only its cockpit window.
+pane_by_title(){ tmux list-panes -s -t "=$LS:" -F '#{pane_id}'$'\t''#{pane_title}' | awk -F'\t' -v t="$1" '$2==t{print $1}'; }
+if [[ -z "$(pane_by_title sh-send)" ]]; then
+    if (( DRY )); then echo "DRY tmux new-window -t =$LS: -n shell (sh-send | sh-stream)"
+    else
+        SEND="$(tmux new-window -d -t "=$LS:" -n shell -c "$LD" -P -F '#{pane_id}' \
+            "TCX_GROUP=$G $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}")" || { out FAIL "new-window failed"; exit 1; }
+        tmux select-pane -t "$SEND" -T sh-send
+        STREAM="$(tmux split-window -h -d -t "$SEND" -c "$LD" -P -F '#{pane_id}' \
+            "TCX_GROUP=$G bash $REPO/setup/tcx-stream.sh")" || { out FAIL "split-window failed"; exit 1; }
+        tmux select-pane -t "$STREAM" -T sh-stream
+        tmux set-option -w -t "$SEND" automatic-rename off
+        tmux set-option -p -t "$SEND" allow-set-title off 2>/dev/null || true
+        tmux set-option -p -t "$STREAM" allow-set-title off 2>/dev/null || true
+    fi
+fi
+if (( ! DRY )); then
+    SEND="$(pane_by_title sh-send)"; STREAM="$(pane_by_title sh-stream)"
+    [[ "$(grep -c . <<<"$SEND")" == 1 && "$(grep -c . <<<"$STREAM")" == 1 ]] \
+        || { out FAIL "sh-send/sh-stream missing or duplicated in $LS"; exit 1; }
+    SHELL_WINDOW="$(tmux display -p -t "$SEND" '#{window_id}')"
+    if (( $(tmux list-panes -t "$SHELL_WINDOW" -F '#{pane_id}' | wc -l) < 3 )); then
+        tmux split-window -v -d -t "$SEND" -c "$LD" \
+            || { out FAIL "could not add local project shell pane"; exit 1; }
+    fi
+fi
+
 panes_of_s(){ timeout 15 "$TCPUXDO" --op state 2>/dev/null \
     | jq -r --arg w "$W" --arg s "$S:" '.state[$w].panes | to_entries[] | select(.key|startswith($s)) | "\(.key)\t\(.value.cmd)\t\(.value.busy)"'; }
 is_idle_shell(){ awk -F'\t' -v p="$1" '$1==p && $2 ~ /^(bash|zsh|sh)$/ && $3=="false"' <<<"$PANES" | grep -q .; }
@@ -94,36 +122,8 @@ fi
 if (( DRY )); then echo "DRY TCX_GROUP=$G tcx.sh use $W $RP"
 else TCX_GROUP="$G" "$REPO/tcx.sh" use "$W" "$RP" >/dev/null || { out FAIL "tcx.sh use failed"; exit 1; }; fi
 
-# 3 — local window "shell": sh-send (compose) | sh-stream
-pane_by_title(){ tmux list-panes -s -t "=$LS:" -F '#{pane_id}'$'\t''#{pane_title}' | awk -F'\t' -v t="$1" '$2==t{print $1}'; }
-if [[ -z "$(pane_by_title sh-send)" ]]; then
-    if (( DRY )); then echo "DRY tmux new-window -t =$LS: -n shell (sh-send | sh-stream)"
-    else
-        SEND="$(tmux new-window -d -t "=$LS:" -n shell -c "$LD" -P -F '#{pane_id}' \
-            "TCX_GROUP=$G $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}")" || { out FAIL "new-window failed"; exit 1; }
-        tmux select-pane -t "$SEND" -T sh-send
-        STREAM="$(tmux split-window -h -d -t "$SEND" -c "$LD" -P -F '#{pane_id}' \
-            "TCX_GROUP=$G bash $REPO/setup/tcx-stream.sh")" || { out FAIL "split-window failed"; exit 1; }
-        tmux select-pane -t "$STREAM" -T sh-stream
-        tmux set-option -w -t "$SEND" automatic-rename off
-        tmux set-option -p -t "$SEND" allow-set-title off 2>/dev/null || true
-        tmux set-option -p -t "$STREAM" allow-set-title off 2>/dev/null || true
-    fi
-fi
+# 3 — local window was built before touching the relay.
 (( DRY )) && { out OK "dry run"; exit 0; }
-
-# Match the working wedding twin's local shell window: send, an ordinary
-# project shell for commands/git, and the remote stream.
-SEND="$(pane_by_title sh-send)"
-SHELL_WINDOW="$(tmux display -p -t "$SEND" '#{window_id}')"
-if (( $(tmux list-panes -t "$SHELL_WINDOW" -F '#{pane_id}' | wc -l) < 3 )); then
-    tmux split-window -v -d -t "$SEND" -c "$LD" \
-        || { out FAIL "could not add local project shell pane"; exit 1; }
-fi
-
-SEND="$(pane_by_title sh-send)"; STREAM="$(pane_by_title sh-stream)"
-[[ "$(grep -c . <<<"$SEND")" == 1 && "$(grep -c . <<<"$STREAM")" == 1 ]] \
-    || { out FAIL "sh-send/sh-stream missing or duplicated in $LS"; exit 1; }
 
 # 4 — optional round trip: command typed in sh-send, OUTPUT line seen in sh-stream
 if (( CHECK )); then

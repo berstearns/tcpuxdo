@@ -54,22 +54,35 @@ export TCX_COCKPIT_LOCAL_SESSION="$LS"
 LD="$(awk -F'\t' -v p="$P" '$1==p{print $2; exit}' "${TCX_LOCAL_DIRS:-$HOME/.config/tcx-cockpit/local-dirs.tsv}" 2>/dev/null)"
 [[ -d "$LD" ]] || LD="$HOME"
 
-"$HERE/AUTO-tcx-cockpit.sh" -p "$P" || hold "AUTO-tcx-cockpit.sh failed (rc=$?)"
-
-# Pin THIS pair to its own target (TCX_GROUP=<session>). The cockpit only
-# writes the SHARED target, so two open pairs would steal each other's stream
-# and sends. Read the shared file right after the cockpit wrote it, then copy
-# it into the group namespace through tcx.sh's own writer.
-TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/target"
-IFS=$'\t' read -r TW TP < "$TARGET" || hold "cockpit wrote no target file"
-TCX_GROUP="$S" "$HERE/../tcx.sh" use "$TW" "$TP" >/dev/null || hold "tcx.sh use $TW $TP failed"
-
-"$HERE/AUTO-tcx-remote-trust.sh" "$TW" "$TP" || echo "[remote-pair $P] WARN: trust step did not reach 'ready' — check tcx-stream"
-remote_agent_cmd="$(timeout 15 "$HERE/../tcpuxdo" --op state 2>/dev/null \
-    | jq -r --arg w "$TW" --arg p "$TP" '.state[$w].panes[$p].cmd // "missing"' 2>/dev/null)"
-if [[ "$remote_agent_cmd" != claude ]]; then
-    echo "[remote-pair $P] FAIL: remote agent pane $TW:$TP reports '${remote_agent_cmd:-unavailable}', expected claude"
+# A project tmuxinator config defines the initial three-window layout. Existing
+# sessions are reconciled below, so reopening i3minator never duplicates it.
+tmuxinator_created=0
+if [[ -f "$HOME/.config/tmuxinator/$LS.yml" ]] && ! tmux has-session -t "=$LS" 2>/dev/null; then
+    tmuxinator start --no-attach "$LS" || hold "tmuxinator could not create $LS"
+    tmuxinator_created=1
+    for _ in {1..30}; do
+        titles="$(tmux list-panes -s -t "=$LS:" -F '#{pane_title}' 2>/dev/null)"
+        [[ "$titles" == *tcx-send* && "$titles" == *tcx-stream* && "$titles" == *remote-manager* && "$titles" == *sh-send* && "$titles" == *sh-stream* ]] && break
+        sleep 0.2
+    done
 fi
+
+# A prior launcher can leave the send pane with a project-specific title.
+# Recover the two-pane cockpit only when its other pane is the known stream.
+if tmux has-session -t "=$LS" 2>/dev/null; then
+    cockpit_panes="$(tmux list-panes -t "=$LS:cockpit" -F '#{pane_id}'$'\t''#{pane_title}' 2>/dev/null)"
+    if [[ "$(wc -l <<<"$cockpit_panes")" == 2 ]] \
+       && [[ "$(awk -F'\t' '$2=="tcx-stream"{n++} END{print n+0}' <<<"$cockpit_panes")" == 1 ]] \
+       && [[ "$(awk -F'\t' '$2=="tcx-send"{n++} END{print n+0}' <<<"$cockpit_panes")" == 0 ]]; then
+        stale_send="$(awk -F'\t' '$2!="tcx-stream"{print $1}' <<<"$cockpit_panes")"
+        if [[ "$(tmux display -p -t "$stale_send" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
+            tmux select-pane -t "$stale_send" -T tcx-send
+            echo "[remote-pair $P] restored cockpit send pane title"
+        fi
+    fi
+fi
+
+"$HERE/AUTO-tcx-cockpit.sh" -p "$P" || hold "AUTO-tcx-cockpit.sh failed (rc=$?)"
 
 # Make the two local panes usable: tcx-send becomes the tcx-compose REPL (type
 # a prompt, Enter sends it to the remote claude; :e opens your editor) and
@@ -105,7 +118,7 @@ if [[ -z "$manager_pane" ]]; then
         "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P")" \
         || hold "could not create local manager window in $LS"
     tmux select-pane -t "$manager_pane" -T remote-manager
-elif [[ "$(tmux display -p -t "$manager_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
+elif (( ! tmuxinator_created )) && [[ "$(tmux display -p -t "$manager_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
     tmux respawn-pane -k -t "$manager_pane" -c "$LD" \
         "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P" \
         || hold "could not restart local manager Codex in $LS"
@@ -121,8 +134,20 @@ if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 3 )); th
 fi
 tmux set-option -w -t "$manager_window" automatic-rename off
 tmux set-option -p -t "$manager_pane" allow-set-title off 2>/dev/null || true
+
+# Finish the local layout before relay checks. A temporary worker failure must
+# not strand this twin with only its cockpit window.
+TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/target"
+IFS=$'\t' read -r TW TP < "$TARGET" || hold "cockpit wrote no target file"
+TCX_GROUP="$S" "$HERE/../tcx.sh" use "$TW" "$TP" >/dev/null || hold "tcx.sh use $TW $TP failed"
+"$HERE/AUTO-tcx-remote-trust.sh" "$TW" "$TP" || echo "[remote-pair $P] WARN: trust step did not reach 'ready' — check tcx-stream"
+remote_agent_cmd="$(timeout 15 "$HERE/../tcpuxdo" --op state 2>/dev/null \
+    | jq -r --arg w "$TW" --arg p "$TP" '.state[$w].panes[$p].cmd // "missing"' 2>/dev/null)"
+if [[ "$remote_agent_cmd" != claude ]]; then
+    echo "[remote-pair $P] FAIL: remote agent pane $TW:$TP reports '${remote_agent_cmd:-unavailable}', expected claude"
+fi
 "$HERE/AUTO-create-or-reuse-remote-git-shell-pane-for-twin.sh" "$P" \
-    || hold "remote git shell pane not ready for $P"
+    || echo "[remote-pair $P] WARN: remote git shell pane not ready; rerun launcher after worker reconnects"
 tmux select-window -t "$manager_window" || hold "could not select local manager window"
 
 if [[ -n "${TMUX:-}" ]]; then
