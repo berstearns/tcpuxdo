@@ -16,8 +16,12 @@ if ! command -v codex >/dev/null; then
     echo "codex command is unavailable in PATH"
     exec "${SHELL:-/bin/bash}"
 fi
-instruction="${2:-$here/prompts/$profile-local-manager.md}"
-[[ -s "$instruction" ]] || instruction="$here/prompts/remote-twin-local-manager.md"
+if [[ "$profile" == rag-papers-gcp-repo ]]; then
+    instruction="${2:-/home/b/p/all-my-tiny-projects/claude-rules/instructions/rag-papers-gcp-repo-local-manager.md}"
+else
+    instruction="${2:-$here/prompts/$profile-local-manager.md}"
+    [[ -s "$instruction" ]] || instruction="$here/prompts/remote-twin-local-manager.md"
+fi
 if [[ ! -s "$instruction" ]]; then
     echo "local Codex instruction .md is missing: $instruction"
     exec "${SHELL:-/bin/bash}"

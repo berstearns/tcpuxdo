@@ -12,7 +12,7 @@ windows:
   - codex-prep-rag-papers-gcp-repo:
       layout: even-horizontal
       panes:
-        - 'tmux select-pane -t "$TMUX_PANE" -T remote-manager; exec /home/b/p/tcpuxdo/scripts/AUTO-run-local-codex-agent-in-project-directory.sh rag-papers-gcp-repo /home/b/p/tcpuxdo/scripts/prompts/rag-papers-gcp-repo-local-manager.md'
+        - 'tmux select-pane -t "$TMUX_PANE" -T remote-manager; exec /home/b/p/tcpuxdo/scripts/AUTO-run-local-codex-agent-in-project-directory.sh rag-papers-gcp-repo /home/b/p/all-my-tiny-projects/claude-rules/instructions/rag-papers-gcp-repo-local-manager.md'
         - 'tmux select-pane -t "$TMUX_PANE" -T manager-shell; exec zsh'
         - 'tmux select-pane -t "$TMUX_PANE" -T manager-git; exec zsh'
   - shell:
