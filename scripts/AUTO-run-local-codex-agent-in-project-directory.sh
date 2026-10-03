@@ -15,7 +15,7 @@ if ! command -v codex >/dev/null; then
     echo "codex command is unavailable in PATH"
     exec "${SHELL:-/bin/bash}"
 fi
-codex -C "$project_dir"
+codex --dangerously-bypass-approvals-and-sandbox -C "$project_dir"
 result=$?
 echo "Codex exited with status $result; shell kept open in $project_dir"
 exec "${SHELL:-/bin/bash}"

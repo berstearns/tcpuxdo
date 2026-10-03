@@ -82,9 +82,12 @@ if [[ -z "$RP" ]]; then
         done
         [[ -n "$RP" ]] || { out FAIL "create-window produced no new pane"; exit 1; }
         sleep 2
-        timeout 30 "$TCPUXDO" --no-cascade -w "$W" -p "$RP" -c "cd $D 2>/dev/null || cd ~; export GIT_TERMINAL_PROMPT=0; clear" >/dev/null 2>&1 \
-            || { out FAIL "cd into $D not accepted on $RP"; exit 1; }
     fi
+fi
+if (( ! DRY )); then
+    timeout 30 "$TCPUXDO" --no-cascade -w "$W" -p "$RP" \
+        -c "mkdir -p $D && cd $D && tmux select-pane -T command-shell; clear" >/dev/null 2>&1 \
+        || { out FAIL "cd into $D not accepted on $RP"; exit 1; }
 fi
 
 # 2 — pin the shell group target (tcx.sh's own writer)
@@ -108,6 +111,15 @@ if [[ -z "$(pane_by_title sh-send)" ]]; then
     fi
 fi
 (( DRY )) && { out OK "dry run"; exit 0; }
+
+# Match the working wedding twin's local shell window: send, an ordinary
+# project shell for commands/git, and the remote stream.
+SEND="$(pane_by_title sh-send)"
+SHELL_WINDOW="$(tmux display -p -t "$SEND" '#{window_id}')"
+if (( $(tmux list-panes -t "$SHELL_WINDOW" -F '#{pane_id}' | wc -l) < 3 )); then
+    tmux split-window -v -d -t "$SEND" -c "$LD" \
+        || { out FAIL "could not add local project shell pane"; exit 1; }
+fi
 
 SEND="$(pane_by_title sh-send)"; STREAM="$(pane_by_title sh-stream)"
 [[ "$(grep -c . <<<"$SEND")" == 1 && "$(grep -c . <<<"$STREAM")" == 1 ]] \

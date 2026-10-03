@@ -11,8 +11,8 @@
 #            4. REMOTE: create tmux session <name> on the worker, then
 #               mkdir -p REMOTE_DIR inside it, verified by a sentinel
 #            5. --launch: i3minator start remote-<name> (local remote-<name>
-#               session with tcx-send/tcx-stream + shell window, claude started
-#               in REMOTE_DIR on the worker)
+#               session with cockpit, manager and shell windows; on the worker,
+#               Claude plus separate command and git shells in REMOTE_DIR)
 #
 # WHY:     2026-10-03, Bernardo: "show me the bash script to create a new twin
 #          rag-papers-gcp in a target dir here and in the remote, and create the

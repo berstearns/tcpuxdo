@@ -4,6 +4,8 @@
 #          ~/.config/i3minator/remote-<profile>.yml window runs. Builds the PAIR:
 #            remote: <session> on the profile's worker, running claude
 #            local : remote-<profile> (tcx-send + tcx-stream)
+#          Also adds a remote command shell and git shell, and a local manager
+#          window with Codex plus two project shells, matching wedding-meta.
 #          answers claude's first-run trust dialog, turns tcx-send into the
 #          tcx-compose REPL (type a prompt, Enter sends it to the remote
 #          claude), pins both panes to this pair (TCX_GROUP=<session>), attaches.
@@ -63,6 +65,11 @@ IFS=$'\t' read -r TW TP < "$TARGET" || hold "cockpit wrote no target file"
 TCX_GROUP="$S" "$HERE/../tcx.sh" use "$TW" "$TP" >/dev/null || hold "tcx.sh use $TW $TP failed"
 
 "$HERE/AUTO-tcx-remote-trust.sh" "$TW" "$TP" || echo "[remote-pair $P] WARN: trust step did not reach 'ready' — check tcx-stream"
+remote_agent_cmd="$(timeout 15 "$HERE/../tcpuxdo" --op state 2>/dev/null \
+    | jq -r --arg w "$TW" --arg p "$TP" '.state[$w].panes[$p].cmd // "missing"' 2>/dev/null)"
+if [[ "$remote_agent_cmd" != claude ]]; then
+    echo "[remote-pair $P] FAIL: remote agent pane $TW:$TP reports '${remote_agent_cmd:-unavailable}', expected claude"
+fi
 
 # Make the two local panes usable: tcx-send becomes the tcx-compose REPL (type
 # a prompt, Enter sends it to the remote claude; :e opens your editor) and
@@ -83,22 +90,40 @@ respawn tcx-send   "TCX_GROUP=$S $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}"
 # Second pair for plain bash: remote terminal in the repo + local window
 # "shell" (sh-send | sh-stream). Idempotent; a failure only warns.
 "$HERE/AUTO-tcx-remote-shell-twin.sh" "$P" || echo "[remote-pair $P] WARN: shell twin not ready — re-run AUTO-tcx-remote-shell-twin.sh $P"
-# The local side also needs its own agent. Keep it in a named window so a
-# second launch reuses the pane instead of creating duplicate Codex agents.
-codex_pane="$(pane_by_title codex-main)"
-if [[ -z "$codex_pane" ]]; then
-    codex_pane="$(tmux new-window -d -t "=$LS:" -n codex -c "$LD" -P -F '#{pane_id}' \
-        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P")" \
-        || hold "could not create local Codex window in $LS"
-    tmux select-pane -t "$codex_pane" -T codex-main
-    tmux set-option -w -t "$codex_pane" automatic-rename off
-    tmux set-option -p -t "$codex_pane" allow-set-title off 2>/dev/null || true
-elif [[ "$(tmux display -p -t "$codex_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
-    tmux respawn-pane -k -t "$codex_pane" -c "$LD" \
-        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P" \
-        || hold "could not restart local Codex in $LS"
+# Mirror the working remote-wedding-meta local session: cockpit, a manager
+# window with Codex and two shells, and the shell twin window.
+manager_pane="$(pane_by_title remote-manager)"
+if [[ -z "$manager_pane" ]]; then
+    manager_pane="$(pane_by_title codex-main)"
+    if [[ -n "$manager_pane" ]]; then
+        tmux select-pane -t "$manager_pane" -T remote-manager
+        tmux rename-window -t "$manager_pane" "codex-prep-$P"
+    fi
 fi
-tmux select-window -t "$codex_pane" || hold "could not select local Codex window"
+if [[ -z "$manager_pane" ]]; then
+    manager_pane="$(tmux new-window -d -t "=$LS:" -n "codex-prep-$P" -c "$LD" -P -F '#{pane_id}' \
+        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P")" \
+        || hold "could not create local manager window in $LS"
+    tmux select-pane -t "$manager_pane" -T remote-manager
+elif [[ "$(tmux display -p -t "$manager_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
+    tmux respawn-pane -k -t "$manager_pane" -c "$LD" \
+        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P" \
+        || hold "could not restart local manager Codex in $LS"
+fi
+manager_window="$(tmux display -p -t "$manager_pane" '#{window_id}')"
+if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 2 )); then
+    tmux split-window -h -d -t "$manager_pane" -c "$LD" \
+        || hold "could not add manager shell pane in $LS"
+fi
+if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 3 )); then
+    tmux split-window -v -d -t "$manager_pane" -c "$LD" \
+        || hold "could not add second manager shell pane in $LS"
+fi
+tmux set-option -w -t "$manager_window" automatic-rename off
+tmux set-option -p -t "$manager_pane" allow-set-title off 2>/dev/null || true
+"$HERE/AUTO-create-or-reuse-remote-git-shell-pane-for-twin.sh" "$P" \
+    || hold "remote git shell pane not ready for $P"
+tmux select-window -t "$manager_window" || hold "could not select local manager window"
 
 if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "=$LS"  # already inside tmux: switch the client
