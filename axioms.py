@@ -79,8 +79,10 @@ def check_send_keys(state, worker_id, pane_id, cmd):
         return _fail("SK3_PANE_NOT_EXIST",
                      f"pane {pane_id} not in worker's current pane set — "
                      f"cascade to create-pane")
-    if not isinstance(cmd, str) or not cmd:
-        return _fail("SK4_BAD_CMD", "cmd must be a non-empty string")
+    # An empty string is an explicit Enter-only request. Missing/non-string
+    # commands still fail; the worker sends only the trailing Enter key.
+    if not isinstance(cmd, str):
+        return _fail("SK4_BAD_CMD", "cmd must be a string")
     return OK
 
 

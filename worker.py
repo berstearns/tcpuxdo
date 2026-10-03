@@ -238,7 +238,7 @@ def tmux_send_keys(pane_id, cmd):
     # The text may span several `-l` calls (see SEND_CHUNK_BYTES) — they land in
     # the input box back-to-back, so the pane still sees ONE prompt, submitted by
     # the single trailing Enter.
-    parts = _chunks(cmd)
+    parts = _chunks(cmd) if cmd else []
     for part in parts:
         _tmux_pane(pane_id, "send-keys", "-t", target, "-l", part)
         if len(parts) > 1:

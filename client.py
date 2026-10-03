@@ -185,7 +185,7 @@ def main():
         ap.error("--port required (or set TCPUX_PORT in env)")
 
     if args.op == "send-keys":
-        if not args.cmd:
+        if args.cmd is None:
             ap.error("--cmd required for send-keys")
         if args.shortcut and (args.worker or args.pane):
             # Forward both fields so the server's SK0_AMBIGUOUS axiom fires —

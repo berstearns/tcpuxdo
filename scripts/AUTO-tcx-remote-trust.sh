@@ -101,8 +101,15 @@ for _ in 1 2 3; do
         timeout) out timeout "no claude dialog or prompt after ${WAIT}s"; exit 1 ;;
     esac
     if (( DRY )); then out dry-run "would answer $state"; exit 0; fi
-    if [[ "$state" == dialog-no ]]; then "$TCPUXDO" -w "$W" -p "$P" -c $'\e[B' >/dev/null 2>&1
-    else                                  "$TCPUXDO" -w "$W" -p "$P" -c '' >/dev/null 2>&1; fi
+    if [[ "$state" == dialog-no ]]; then
+        sent="$("$TCPUXDO" -w "$W" -p "$P" -c $'\e[B' 2>&1)" || {
+            out error "dialog selection rejected: $sent"; exit 1;
+        }
+    else
+        sent="$("$TCPUXDO" enter -w "$W" -p "$P" 2>&1)" || {
+            out error "Enter rejected: $sent"; exit 1;
+        }
+    fi
     answered=$(( answered + 1 ))
     sleep 4
 done

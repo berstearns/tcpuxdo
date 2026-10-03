@@ -8,6 +8,7 @@
 # Usage:
 #   tcpuxdo -w nodeA -p work:1:1 -c 'git pull'   # send-keys (default verb)
 #   tcpuxdo -s claude-main -c '/compact'         # send-keys via shortcut
+#   tcpuxdo enter -w nodeA -p work:1:1          # one Enter key, no text
 #   tcpuxdo read -s claude-main [--lines 200]    # capture pane text back (stdout)
 #   tcpuxdo list [nodeA]                          # pretty-print nodes + panes
 #   tcpuxdo shortcut set NAME -w nodeA -p work:1:1 [--force]
@@ -94,6 +95,10 @@ PY
     shift
     exec python3 "$HERE/client.py" --op capture-pane "$@"
     ;;
+  enter)
+    shift
+    exec python3 "$HERE/client.py" --op send-keys --no-cascade --cmd '' "$@"
+    ;;
   -h|--help|"")
     python3 "$HERE/client.py" --help 2>/dev/null || true
     echo
@@ -102,6 +107,7 @@ PY
     echo "  tcpuxdo -s NAME -c 'CMD'            send-keys via shortcut"
     echo "  tcpuxdo read -s NAME [--lines N]    capture pane text back (stdout)"
     echo "  tcpuxdo read -w NODE -p s:w:p       capture pane text by pane id"
+    echo "  tcpuxdo enter -w NODE -p s:w:p      press only Enter in an existing pane"
     echo "  tcpuxdo list [NODE]                 pretty-print nodes + panes"
     echo "  tcpuxdo shortcut {set|del|ls}       manage pane shortcuts"
     echo "  tcpuxdo allow|block <ip> | get      manage the relay IP allowlist"
