@@ -83,7 +83,22 @@ respawn tcx-send   "TCX_GROUP=$S $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}"
 # Second pair for plain bash: remote terminal in the repo + local window
 # "shell" (sh-send | sh-stream). Idempotent; a failure only warns.
 "$HERE/AUTO-tcx-remote-shell-twin.sh" "$P" || echo "[remote-pair $P] WARN: shell twin not ready — re-run AUTO-tcx-remote-shell-twin.sh $P"
-tmux select-pane -t "$(pane_by_title tcx-send)" 2>/dev/null
+# The local side also needs its own agent. Keep it in a named window so a
+# second launch reuses the pane instead of creating duplicate Codex agents.
+codex_pane="$(pane_by_title codex-main)"
+if [[ -z "$codex_pane" ]]; then
+    codex_pane="$(tmux new-window -d -t "=$LS:" -n codex -c "$LD" -P -F '#{pane_id}' \
+        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P")" \
+        || hold "could not create local Codex window in $LS"
+    tmux select-pane -t "$codex_pane" -T codex-main
+    tmux set-option -w -t "$codex_pane" automatic-rename off
+    tmux set-option -p -t "$codex_pane" allow-set-title off 2>/dev/null || true
+elif [[ "$(tmux display -p -t "$codex_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
+    tmux respawn-pane -k -t "$codex_pane" -c "$LD" \
+        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P" \
+        || hold "could not restart local Codex in $LS"
+fi
+tmux select-window -t "$codex_pane" || hold "could not select local Codex window"
 
 if [[ -n "${TMUX:-}" ]]; then
     tmux switch-client -t "=$LS"  # already inside tmux: switch the client

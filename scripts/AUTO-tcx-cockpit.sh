@@ -654,7 +654,9 @@ remote_half() {
         # does NOT write the export — measured on a naked Arch container, a
         # LOGIN shell still cannot see claude. So the launch carries its own
         # PATH and depends on no rc file at all.
-        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
+        # The profile can outlive the worker filesystem (for example after a
+        # WSL reset). Recreate its project directory on every fresh launch.
+        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; mkdir -p ${CONFIG[dir]} && cd ${CONFIG[dir]} && exec ${CONFIG[claude_cmd]}'"
         step "remote: send-keys \"$launch\" -> $w $pane"
         run "$TCPUXDO" ${RELAY_FLAGS[@]+"${RELAY_FLAGS[@]}"} --no-cascade -w "$w" -p "$pane" \
             -c "$launch" >/dev/null \
