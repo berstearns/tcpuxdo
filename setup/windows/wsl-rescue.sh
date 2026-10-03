@@ -28,6 +28,10 @@
 #          one screen, what to send back when it cannot fix.
 #
 # INPUTS:  $1 (optional)  relay host[:port] — only used when no .env has one.
+#          $2 (optional)  one-time JOIN CODE from `join/tcx-join up` on main:
+#                         this machine first calls the relay's temporary join
+#                         door, which allowlists its public IP (unknown-IP fix).
+#                         The line Bernardo sends:  … | bash -s -- <relay> <code>
 #          env TCPUXDO_DIR  force a checkout path (skips the search)
 #          env TCPUX_WORKER worker name to ensure (default wsl-)
 #          env RESCUE_STOP_BEFORE_BRINGUP=1  test mode: steps 1-6 only, no worker
@@ -42,6 +46,8 @@
 #===============================================================================
 set -uo pipefail
 RELAY_ARG="${1:-}"
+JOIN_CODE="${2:-}"                      # one-time code from `join/tcx-join up` (optional)
+JOIN_PORT="${RESCUE_JOIN_PORT:-9102}"
 WNAME="${TCPUX_WORKER:-wsl-}"
 REPO_URL="${RESCUE_REPO_URL:-https://github.com/berstearns/tcpuxdo.git}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
@@ -135,6 +141,17 @@ set -a
 set +a
 PUBIP="$(curl -fsS --max-time 8 https://api.ipify.org 2>/dev/null || echo unknown)"
 say "this machine's public IP: $PUBIP"
+# 6a — join code (from Bernardo's `tcx-join`): let this machine's IP in FIRST.
+#      Harmless when the IP is already allowed; one use of a one-time code.
+if [ -n "$JOIN_CODE" ]; then
+    JOIN_SAYS="$(curl -sS --max-time 20 "http://$TCPUX_HOST:${JOIN_PORT}/join?code=${JOIN_CODE}&worker=${WNAME}" 2>&1)"
+    say "join door says: $JOIN_SAYS"
+    case "$JOIN_SAYS" in
+        JOINED*) ok "this machine is now allowed on the server ($PUBIP)" ;;
+        *EXPIRED*|*WRONG*|*BANNED*) verdict_bad "the join code did not work: $JOIN_SAYS — ask Bernardo for a NEW line (tcx-join)" ;;
+        *) say "join door not reachable — continuing (the IP may already be allowed)" ;;
+    esac
+fi
 RELAY_SAYS="$(PYTHONPATH="$DIR" TCPUX_CONNECT_RETRY_SECS=20 python3 - <<'PY' 2>&1
 import os, socket
 socket.setdefaulttimeout(8)

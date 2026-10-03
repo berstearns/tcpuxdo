@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+#===============================================================================
+# WHAT:    tcx-join — open a TEMPORARY, code-protected "join door" on the relay,
+#          from main-laptop-1, so a worker on an UNKNOWN IP can add itself to
+#          the relay allowlist with one pasted line. Same strategy as fserve:
+#          main launches a short-lived server with a fresh code; the code is
+#          used once; the door closes by itself.
+#
+#            tcx-join                 open a door (30 min, 1 use, worker wsl-)
+#            tcx-join up 2h -u 3 -w wsl-   longer, 3 uses
+#            tcx-join status          is a door open? time + uses left
+#            tcx-join down            close it now (server + firewall port)
+#            tcx-join -n …            print every step, change nothing
+#
+#          `up` prints ONE line for the person at the worker (and copies it):
+#            curl -fsSL …/setup/windows/wsl-rescue.sh | bash -s -- <relay> <code>
+#          wsl-rescue.sh calls the door with the code first, then starts the
+#          worker — nothing else to type there.
+#
+# WHY:     2026-10-03: wsl- may be behind a new IP; the relay drops unknown IPs
+#          before reading anything, adding one needs the admin token, and the
+#          token must never leave main + relay. Bernardo: "exactly the same
+#          strategy as fserve — a temporary code generated from my laptop that
+#          the worker uses to join". Standalone: it changes NO existing tcpuxdo
+#          file; it only adds join/ and talks to the relay's own admin port.
+#
+# INPUTS:  ./.env (repo root): TCPUX_HOST, TCPUX_ADMIN_PORT, TCPUX_ADMIN_TOKEN
+#          (SECRET, never printed), TCPUX_DO_FW_ID (DigitalOcean firewall id).
+#          flags: -u USES (1) · -w WORKER (wsl-; '' = any) · -p PORT (9102)
+#                 TTL word for up: 30m | 2h | 90s (default 30m)
+# OUTPUTS: stdout: the line for the worker + "door open until HH:MM".
+#          relay: tmux session tcpuxdo-join running join/join_server.py,
+#          files under /srv/tcpuxdo/join/ (the env file is deleted by the
+#          server on start). DO firewall: inbound tcp PORT added by up,
+#          removed by down. exit 0 ok · 1 failure · 64 usage
+# SAFETY:  code = 128-bit random, single use by default, 3 wrong tries ban an
+#          IP, TTL-bounded; the door only ever calls `allow` for the CALLER's
+#          own IP. The token travels over ssh into a mode-600 file only.
+#          NOTE: the door is plain HTTP (like the queue itself). The code is
+#          one-use and short-lived; do not post the line publicly.
+#===============================================================================
+set -uo pipefail
+HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO="$(cd "$HERE/.." && pwd)"
+RAW="https://raw.githubusercontent.com/berstearns/tcpuxdo/master/setup/windows/wsl-rescue.sh"
+RDIR="/srv/tcpuxdo/join"
+SESS="tcpuxdo-join"
+DRY=0; USES=1; WORKER="wsl-"; PORT=9102; TTLW="30m"; VERB="up"
+
+die(){ echo "tcx-join: $1" >&2; exit "${2:-1}"; }
+while (( $# )); do case "$1" in
+    -n) DRY=1; shift ;;
+    -u) USES="${2:?}"; shift 2 ;;
+    -w) WORKER="${2-}"; shift 2 ;;
+    -p) PORT="${2:?}"; shift 2 ;;
+    -h|--help) sed -n '2,45p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    up|status|down) VERB="$1"; shift ;;
+    [0-9]*[smhd]) TTLW="$1"; shift ;;
+    *) die "unknown argument '$1' (see -h)" 64 ;;
+esac; done
+
+[[ -r "$REPO/.env" ]] || die "no $REPO/.env" 64
+set -a; . "$REPO/.env"; set +a
+: "${TCPUX_HOST:?}" "${TCPUX_ADMIN_PORT:?}"
+[[ -n "${TCPUX_ADMIN_TOKEN:-}" ]] || die "TCPUX_ADMIN_TOKEN missing in .env" 64
+DO_AUTO="${DO_AUTO:-/home/b/p/all-my-tiny-projects/do-automation}"
+RSSH1(){ DO_HOST="$TCPUX_HOST" "$DO_AUTO/do-ssh-pass" "$@"; }
+# Every relay step below is idempotent, so a flapping uplink ("No route to
+# host", 2026-10-03) is retried instead of failing the whole up/down.
+# RSSH CMD [STDIN_FILE] — the file is re-read on every try.
+RSSH(){ local i
+        for i in 1 2 3 4 5 6; do
+            if [[ -n "${2:-}" ]]; then RSSH1 "$1" < "$2" && return 0
+            else RSSH1 "$1" && return 0; fi
+            echo "  (ssh try $i failed — retrying)" >&2; sleep 4
+        done; return 1; }
+run(){ if (( DRY )); then printf 'DRY'; printf ' %q' "$@"; echo; else "$@"; fi; }
+
+ttl_secs(){ local n="${1%[smhd]}" u="${1: -1}"; case "$u" in s) echo "$n";; m) echo $((n*60));; h) echo $((n*3600));; d) echo $((n*86400));; esac; }
+
+fw_add(){ [[ -n "${TCPUX_DO_FW_ID:-}" ]] || { echo "  (no TCPUX_DO_FW_ID — firewall untouched)"; return 0; }
+          run doctl compute firewall add-rules "$TCPUX_DO_FW_ID" --inbound-rules "protocol:tcp,ports:$PORT,address:0.0.0.0/0,address:::/0" >/dev/null 2>&1 \
+              && echo "  firewall: tcp $PORT open" || echo "  firewall: add-rules failed (already open?)"; }
+fw_del(){ [[ -n "${TCPUX_DO_FW_ID:-}" ]] || return 0
+          run doctl compute firewall remove-rules "$TCPUX_DO_FW_ID" --inbound-rules "protocol:tcp,ports:$PORT,address:0.0.0.0/0,address:::/0" >/dev/null 2>&1 \
+              && echo "  firewall: tcp $PORT closed" || echo "  firewall: remove-rules failed (already closed?)"; }
+health(){ curl -fsS --max-time 6 "http://$TCPUX_HOST:$PORT/health" 2>/dev/null; }
+
+case "$VERB" in
+status)
+    h="$(health)" && echo "door OPEN on :$PORT — $h" || echo "door closed (no answer on :$PORT)"
+    exit 0 ;;
+down)
+    echo "closing the join door"
+    if (( DRY )); then echo "DRY RSSH tmux kill-session tcpuxdo-join; rm -rf $RDIR"
+    else RSSH "tmux kill-session -t '=$SESS' 2>/dev/null; rm -rf $RDIR; echo relay-side-closed" | tail -1; fi
+    fw_del; exit 0 ;;
+esac
+
+# ── up ───────────────────────────────────────────────────────────────────────
+SECS="$(ttl_secs "$TTLW")"; [[ -n "$SECS" && "$SECS" -gt 0 ]] || die "bad TTL '$TTLW' (30m, 2h, 90s)" 64
+[[ "$USES" =~ ^[1-9][0-9]*$ ]] || die "bad -u '$USES'" 64
+CODE="$(python3 -c 'import secrets; print(secrets.token_urlsafe(16))')"
+until_hm="$(date -d "+$SECS seconds" +%H:%M)"
+echo "opening a join door on the relay: :$PORT, $TTLW, $USES use(s), worker ${WORKER:-any}"
+
+ENVF="$(mktemp)"; chmod 600 "$ENVF"; trap 'rm -f "$ENVF"' EXIT
+printf 'JOIN_CODE=%s\nADMIN_TOKEN=%s\nADMIN_PORT=%s\nJOIN_TTL_SECS=%s\nJOIN_USES=%s\nJOIN_WORKER=%s\n' \
+    "$CODE" "$TCPUX_ADMIN_TOKEN" "$TCPUX_ADMIN_PORT" "$SECS" "$USES" "$WORKER" > "$ENVF"
+
+if (( DRY )); then
+    echo "DRY RSSH: mkdir -p $RDIR; write join_server.py + mode-600 join.env (token, code) via stdin"
+    echo "DRY RSSH: tmux new-session -d -s $SESS python3 $RDIR/join_server.py --env-file $RDIR/join.env --port $PORT"
+    fw_add
+    echo "DRY line: curl -fsSL $RAW | bash -s -- <relay> <code>"
+    exit 0
+fi
+
+# 1 — ship the server + the secret env (stdin only; never on a command line)
+RSSH "tmux kill-session -t '=$SESS' 2>/dev/null; mkdir -p $RDIR && chmod 700 $RDIR && cat > $RDIR/join_server.py" "$HERE/join_server.py" \
+    || die "could not copy join_server.py to the relay"
+RSSH "umask 077; cat > $RDIR/join.env" "$ENVF" || die "could not write join.env on the relay"
+# 2 — start it in its own titled tmux session on the relay
+RSSH "tmux new-session -d -s $SESS -n door 'python3 -u $RDIR/join_server.py --env-file $RDIR/join.env --port $PORT; sleep 30' && tmux select-pane -t '=$SESS:door' -T tcpuxdo-join-door && echo started" | tail -1
+# 3 — firewall + verify from HERE (the real path a worker takes)
+fw_add
+ok=0; for _ in $(seq 1 15); do h="$(health)" && { ok=1; break; }; sleep 2; done
+(( ok )) || { echo "door did not answer on $TCPUX_HOST:$PORT — closing"; "$0" down >/dev/null; exit 1; }
+echo "  door answers: $h"
+
+LINE="curl -fsSL $RAW | bash -s -- $TCPUX_HOST $CODE"
+command -v xclip >/dev/null && printf '%s\n' "$LINE" | xclip -selection clipboard && echo "  (line copied to the clipboard)"
+echo
+echo "SEND THIS ONE LINE to the person at the worker (private message only):"
+echo
+echo "  $LINE"
+echo
+echo "door open until $until_hm · $USES use(s) · check: $0 status · close now: $0 down"
