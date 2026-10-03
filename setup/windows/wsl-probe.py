@@ -68,13 +68,28 @@ def restart_worker():
     command = worker_command()
     if tmux("has-session", "-t", WORKER_SESSION).returncode != 0:
         r = tmux("new-session", "-d", "-s", WORKER_SESSION, "-n", "worker",
-                 "-c", str(ROOT), command)
+                 "-c", str(ROOT))
     else:
         worker_pane, _ = pane(WORKER_SESSION)
-        r = tmux("respawn-pane", "-k", "-t", worker_pane, command)
+        r = tmux("respawn-pane", "-k", "-t", worker_pane)
     if r.returncode != 0:
         fail(f"could not start probe worker: {r.stderr.strip()}")
+    worker_pane, _ = pane(WORKER_SESSION)
+    tmux("select-pane", "-t", worker_pane, "-T", "tcpuxdo-probe-worker")
+    r = tmux("send-keys", "-t", worker_pane, "-l", command)
+    if r.returncode != 0:
+        fail(f"could not type probe worker command: {r.stderr.strip()}")
+    r = tmux("send-keys", "-t", worker_pane, "Enter")
+    if r.returncode != 0:
+        fail(f"could not start probe worker command: {r.stderr.strip()}")
     print(f"probe worker {PROBE} started from current checkout", flush=True)
+
+
+def worker_tail():
+    worker_pane, command = pane(WORKER_SESSION)
+    r = tmux("capture-pane", "-p", "-t", worker_pane, "-S", "-8")
+    lines = [line.strip() for line in r.stdout.splitlines() if line.strip()]
+    return f"worker pane is {command}; last output: {' | '.join(lines[-6:])}"
 
 
 def state():
@@ -99,8 +114,13 @@ def wait_for_probe(pane_id, seconds=20):
         record = result.get("state", {}).get(PROBE, {})
         if fresh(record) and pane_id in record.get("panes", {}):
             return result
+        if tmux("has-session", "-t", WORKER_SESSION).returncode == 0:
+            _, command = pane(WORKER_SESSION)
+            if command not in {"python3", "bash", "zsh", "fish", "sh", "dash"}:
+                fail(worker_tail())
         if time.monotonic() >= deadline:
-            fail(f"{PROBE} did not report fresh tmux pane {pane_id} within {seconds}s")
+            fail(f"{PROBE} did not report fresh tmux pane {pane_id} within {seconds}s; "
+                 + worker_tail())
         time.sleep(2)
 
 
