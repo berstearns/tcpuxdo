@@ -6,7 +6,7 @@ profile="${1:-}"
 case "$profile" in
     app7)
         dir=/home/b/p/minimal-android-apps/app7-maestro-automation
-        runner='./run-all.sh'
+        runner='./run.sh flows/NAME.yaml [data/FILE.tsv]'
         ;;
     app11)
         dir=/home/b/p/minimal-android-apps/app11-research-reader-android/mono/app/src/androidApp/maestro

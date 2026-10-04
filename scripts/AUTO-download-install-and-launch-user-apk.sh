@@ -1,22 +1,42 @@
 #!/usr/bin/env bash
-# Download (or reuse) an APK, install it on an explicitly selected device,
-# and launch its package. This runs only when the user invokes it in the ui pane.
+# Download the newest published Hetzner APK by default, install it on the
+# single connected USB phone by default, and launch its package. Runs only
+# when the user invokes it in the user or ui pane.
 set -euo pipefail
-if (( $# != 3 )); then
-    echo 'usage: AUTO-download-install-and-launch-user-apk.sh PROFILE APK_URL_OR_FILE DEVICE_SERIAL' >&2
+if (( $# < 1 || $# > 3 )); then
+    echo 'usage: AUTO-download-install-and-launch-user-apk.sh PROFILE [HETZNER_APK_OR_URL_OR_FILE] [DEVICE_SERIAL]' >&2
     exit 64
 fi
-profile="$1"; apk_source="$2"; serial="$3"
+profile="$1"; apk_source="${2:-}"; serial="${3:-}"
 [[ "$profile" =~ ^(app7|app9|app11|app303-get-my-audio-android)$ ]] || { echo "not an Android profile: $profile" >&2; exit 64; }
-[[ -n "$serial" && "$serial" != *[[:space:]]* ]] || { echo 'select a device serial with adb devices -l' >&2; exit 64; }
+artifact_app="$profile"
+[[ "$profile" == app303-get-my-audio-android ]] && artifact_app=app303
 adb devices -l
+if [[ -z "$serial" ]]; then
+    mapfile -t phones < <(adb devices -l | awk '$2=="device" && $1 !~ /^emulator-/ {print $1}')
+    (( ${#phones[@]} == 1 )) || { echo "expected one USB phone, found ${#phones[@]}; pass DEVICE_SERIAL (including for an emulator)" >&2; exit 64; }
+    serial="${phones[0]}"
+fi
+[[ "$serial" != *[[:space:]]* ]] || { echo 'invalid device serial' >&2; exit 64; }
 state="$(adb -s "$serial" get-state 2>/dev/null || true)"
 [[ "$state" == device ]] || { echo "device $serial is not ready (state: ${state:-missing})" >&2; exit 1; }
-if [[ "$apk_source" == https://* ]]; then
+if [[ -z "$apk_source" ]]; then
+    remote_dir="hetzner:apps/$artifact_app/release"
+    command -v rclone >/dev/null || { echo 'rclone is required for the default Hetzner APK' >&2; exit 1; }
+    command -v jq >/dev/null || { echo 'jq is required to select the newest Hetzner APK' >&2; exit 1; }
+    apk_name="$(rclone lsjson --files-only "$remote_dir" | jq -r '[.[] | select(.Name | endswith(".apk"))] | sort_by(.ModTime) | last | .Name // empty')"
+    [[ -n "$apk_name" ]] || { echo "no APK found at $remote_dir; pass an explicit APK path or URL" >&2; exit 1; }
+    apk_source="$remote_dir/$apk_name"
+fi
+if [[ "$apk_source" == https://* || "$apk_source" == hetzner:* ]]; then
     out="${TCX_USER_RUNS_DIR:-$HOME/runs}/$profile-user-apks"
     mkdir -p "$out"
-    apk="$out/$(date -u +%Y%m%dT%H%M%SZ).apk"
-    curl --fail --location --output "$apk" -- "$apk_source"
+    apk="$out/$(date -u +%Y%m%dT%H%M%SZ)-${apk_source##*/}"
+    if [[ "$apk_source" == hetzner:* ]]; then
+        rclone copyto "$apk_source" "$apk"
+    else
+        curl --fail --location --output "$apk" -- "$apk_source"
+    fi
 else
     apk="$(realpath "$apk_source")"
 fi

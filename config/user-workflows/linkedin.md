@@ -1,3 +1,5 @@
-# LinkedIn keyboard user
+# LinkedIn feed and jobs user
 
-Follow `default.md` in this directory. Set up the keyboard automation from the fresh checkout's documented entry point. Verify the visible browser and keyboard behavior in a separate user run. Do not act on the owner's LinkedIn account or send messages without their instruction. Report missing install steps and actual UI behavior to the manager.
+Follow `default.md` in this directory. This user copy opens a separate snapshot of `linkedin-scraping/`, where the feed and job annotation implementation lives. The folder is currently unpublished and untracked in its parent Git repository: report that provenance gap. The acceptance goal is to annotate feed posts **and job posts**, collect their post/job content and annotations, then see the corresponding records in the remote Turso database. Read `browser-annotator/README.md`, inspect the server and extension setup, and use the owner's account only with their direction. For each surface, record the item identity, the annotation entered, the local collection result, the Turso write result, and a read-back of the remote row. Report duplicates, missing fields, and mismatched records to the manager.
+
+The remote developer's `21.2-linkedin-keyboard-automation` checkout only drives a local practice page; its README says it has no network sink. Do not claim this user goal is complete from a successful practice-page run. Show the manager the missing integration between that prototype and the working feed/jobs annotation pipeline.

@@ -1,3 +1,3 @@
 # Gen-GEC-ERRANT user
 
-Follow `gengecerr-pipeline-running.md` in this directory. Reproduce the public pipeline from the fresh checkout and a new run directory. Keep the user result separate from the developer run and report the source SHA and output paths.
+Follow `gengecerr-pipeline-running.md` in this directory. Choose a concrete matrix cell by model family and size, fine-tuned versus native, L1/CEFR head versus no head, and one shard. Run exactly one shard at a time from the fresh checkout with a new output directory. Record all four choices, the config and checkpoint, source SHA, and result before choosing another cell.
