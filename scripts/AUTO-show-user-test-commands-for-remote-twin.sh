@@ -7,7 +7,7 @@ project_dir="$("$here/AUTO-open-fresh-user-checkout-for-remote-twin.sh" "$profil
 printf '\nUSER CHECKOUT: %s\nRun commands from this directory. Review the project README first.\n\n' "$project_dir"
 case "$profile" in
   gengecerr|gengecerr-dev|gengecerr-pipeline-running)
-    printf '%s\n' 'Pick one exact cell: model family + size, fine-tuned or native, L1/CEFR head or no head, then ONE shard.' 'List shipped cells: python run.py --list' 'Resolve one cell: python run.py CELL --dry-run' 'Run one cell: python run.py CELL --out ~/runs/USER-RUN/out' 'Record the cell config, source SHA, checkpoint, corpus, output, and L1/CEFR head provenance. The base 88-cell CLI does not encode an L1/CEFR head switch: use the separate conditioning pipeline or report this axis as unavailable.' ;;
+    printf '%s\n' 'Pick one exact cell: model family + size, fine-tuned or native, L1/CEFR head or no head, then ONE shard.' 'List shipped cells: python run.py --list' 'Resolve one cell: python run.py CELL --dry-run' 'Run one cell: python run.py CELL --out ~/runs/USER-RUN/out' 'Record the cell config, source SHA, checkpoint, corpus, output, and L1/CEFR head provenance. The base 88-cell CLI does not encode an L1/CEFR head switch: use the separate conditioning pipeline or report this axis as unavailable.' 'Final acceptance: inspect the published result on the remote rclone source of truth, hetzner:. If it is not there, the run fails.' ;;
   gengecerr-paper)
     printf '%s\n' 'Paper: inspect the committed paper instructions and verify claims against a fresh pipeline run and its outputs.' ;;
   app7|app9|app11|app303-get-my-audio-android)
