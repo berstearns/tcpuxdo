@@ -1,0 +1,3 @@
+# App11 phone user
+
+Follow `default.md` in this directory. The app11 developer repo for this twin is the Rust domain fence checkout. Locate the Android build source and published APK deliberately; do not assume the backend checkout contains the APK. List `adb devices -l`, select a USB phone or emulator, install the chosen APK, and verify the installed package and foreground activity. An optional source build must use a fresh checkout of the Android repo. The `ui` tmux window is for the documented `androidApp/maestro/run-all.sh` flow from that Android checkout. Report if a required artifact or repo is missing instead of testing a stale APK.

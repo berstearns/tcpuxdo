@@ -113,7 +113,8 @@ respawn(){  # $1 title  $2 command
 respawn tcx-stream "TCX_GROUP=$S bash $HERE/../setup/tcx-stream.sh"
 respawn tcx-send   "TCX_GROUP=$S $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}"
 # Mirror the working remote-wedding-meta local session: cockpit, a manager
-# window with the selected agent and two shells, and the shell twin window.
+# window with the selected agent and two shells, a shell twin, and a separate
+# fresh-checkout user window.
 manager_pane="$(pane_by_title remote-manager)"
 if [[ -z "$manager_pane" ]]; then
     manager_pane="$(pane_by_title codex-main)"
@@ -148,6 +149,31 @@ if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 3 )); th
 fi
 tmux set-option -w -t "$manager_window" automatic-rename off
 tmux set-option -p -t "$manager_pane" allow-set-title off 2>/dev/null || true
+
+# Existing wedding and Duolingo sessions already have manually created user
+# windows. Preserve their running agents and drafts. Add generated user/UI
+# windows only where absent; new tmuxinator sessions already include them.
+user_window="$(tmux list-windows -t "=$LS" -F '#{window_name}' | grep -m1 '^user' || true)"
+if [[ -z "$user_window" ]]; then
+    user_agent_pane="$(tmux new-window -d -t "=$LS:" -n "user-$P" -c "$LD" -P -F '#{pane_id}' \
+        "$HERE/AUTO-run-local-user-agent-in-fresh-checkout.sh $P")" \
+        || hold "could not create local user window in $LS"
+    tmux select-pane -t "$user_agent_pane" -T user-agent
+    user_setup_pane="$(tmux split-window -h -d -t "$user_agent_pane" -c "$LD" -P -F '#{pane_id}' \
+        "$HERE/AUTO-show-user-test-commands-for-remote-twin.sh $P; $HERE/AUTO-open-fresh-user-checkout-for-remote-twin.sh $P --shell; exec zsh")" \
+        || hold "could not add user setup shell in $LS"
+    tmux select-pane -t "$user_setup_pane" -T user-setup
+fi
+case "$P" in
+    app7|app9|app11|app303-get-my-audio-android)
+        if ! tmux has-session -t "=$LS:ui-$P" 2>/dev/null; then
+            ui_pane="$(tmux new-window -d -t "=$LS:" -n "ui-$P" -c "$LD" -P -F '#{pane_id}' \
+                "$HERE/AUTO-show-user-test-commands-for-remote-twin.sh $P; $HERE/AUTO-open-android-user-ui-automation-shell.sh $P; exec zsh")" \
+                || hold "could not create Android UI window in $LS"
+            tmux select-pane -t "$ui_pane" -T user-ui
+        fi
+        ;;
+esac
 
 # Second pair for plain bash: remote terminal in the repo + local window
 # "shell" (sh-send | sh-stream). Create the local manager first so a slow

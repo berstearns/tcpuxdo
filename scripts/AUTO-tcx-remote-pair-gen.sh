@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #===============================================================================
 # WHAT:    AUTO-tcx-remote-pair-gen.sh — the ONE writer of
-#          ~/.config/i3minator/remote-<profile>.yml and matching three-window
+#          ~/.config/i3minator/remote-<profile>.yml and matching user-enabled
 #          ~/.config/tmuxinator/remote-<profile>.yml. One pair per line of the
 #          cockpit profiles file, so $mod+Ctrl+x lists "remote-<name>" next to
 #          the local "<name>" launcher (type "remote-" in rofi to filter).
@@ -70,7 +70,7 @@ cat <<EOF
 # Source: $CONF line "$1". Edit that line, then re-run the generator.
 #
 # Remote twin of "$1": selected remote agent in session "$3" on worker "$2", plus the
-# local tmux session remote-$1 (cockpit, manager, shell). Trigger: \$mod+Ctrl+x, type
+# local tmux session remote-$1 (cockpit, manager, shell, user; Android adds ui). Trigger: \$mod+Ctrl+x, type
 # "remote-". The workspace below is only a default; rofi asks.
 name: remote-$1
 workspace: $4
@@ -108,7 +108,21 @@ windows:
         - 'tmux select-pane -t "\$TMUX_PANE" -T sh-send; TCX_GROUP=$3-sh $HERE/AUTO-tcx-compose.sh; exec zsh'
         - 'tmux select-pane -t "\$TMUX_PANE" -T shell-git; exec zsh'
         - 'tmux select-pane -t "\$TMUX_PANE" -T sh-stream; TCX_GROUP=$3-sh bash $HERE/../setup/tcx-stream.sh'
+  - user-$1:
+      layout: even-horizontal
+      panes:
+        - 'tmux select-pane -t "\$TMUX_PANE" -T user-agent; exec $HERE/AUTO-run-local-user-agent-in-fresh-checkout.sh $1'
+        - 'tmux select-pane -t "\$TMUX_PANE" -T user-setup; $HERE/AUTO-show-user-test-commands-for-remote-twin.sh $1; $HERE/AUTO-open-fresh-user-checkout-for-remote-twin.sh $1 --shell; exec zsh'
 EOF
+case "$1" in
+    app7|app9|app11|app303-get-my-audio-android)
+cat <<EOF
+  - ui-$1:
+      panes:
+        - 'tmux select-pane -t "\$TMUX_PANE" -T user-ui; $HERE/AUTO-show-user-test-commands-for-remote-twin.sh $1; $HERE/AUTO-open-android-user-ui-automation-shell.sh $1; exec zsh'
+EOF
+    ;;
+esac
 }
 
 rc=0
