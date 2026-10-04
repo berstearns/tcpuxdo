@@ -44,9 +44,10 @@ IFS=':' read -r _ W S _ <<<"$line"
 # prompts, so it never blocks on a dialog nobody is watching on the worker
 # (2026-10-02, Bernardo: a remote pair stuck on "Do you want to proceed?" is a
 # failed setup). Override per launch with TCX_COCKPIT_CLAUDE_CMD.
-if [[ "$P" == rag-papers-gcp-repo || "$P" == wedding-meta || "$P" == whatsapp-filters ]]; then
-    export TCX_COCKPIT_REMOTE_INSTRUCTION_FILE="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P-remote-worker.md"
-fi
+remote_instructions="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P-remote-worker.md"
+[[ -s "$remote_instructions" ]] || remote_instructions="/home/b/p/all-my-tiny-projects/claude-rules/instructions/remote-twin-remote-worker.md"
+[[ -s "$remote_instructions" ]] || hold "remote instruction .md missing: $remote_instructions"
+export TCX_COCKPIT_REMOTE_INSTRUCTION_FILE="$remote_instructions"
 export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
 # The LOCAL twin session is named like the launcher: remote-<profile>
 # (2026-10-03, Bernardo: every twin session must carry the remote- prefix).
@@ -55,7 +56,7 @@ export TCX_COCKPIT_LOCAL_SESSION="$LS"
 # Local project dir = cwd of every local pane of remote-<profile> (2026-10-03,
 # Bernardo: panes must start in the project folder, not in tcpuxdo or ~/runs).
 LD="$(awk -F'\t' -v p="$P" '$1==p{print $2; exit}' "${TCX_LOCAL_DIRS:-$HOME/.config/tcx-cockpit/local-dirs.tsv}" 2>/dev/null)"
-[[ -d "$LD" ]] || LD="$HOME"
+[[ -d "$LD" ]] || hold "local project directory missing for $P: $LD"
 
 # A project tmuxinator config defines the initial three-window layout. Existing
 # sessions are reconciled below, so reopening i3minator never duplicates it.
