@@ -2,13 +2,13 @@
 #===============================================================================
 # WHAT:    AUTO-tcx-remote-pair-window.sh <profile> — the program every
 #          ~/.config/i3minator/remote-<profile>.yml window runs. Builds the PAIR:
-#            remote: <session> on the profile's worker, running claude
+#            remote: <session> on the profile's worker, running chosen agent
 #            local : remote-<profile> (tcx-send + tcx-stream)
 #          Also adds a remote command shell and git shell, and a local manager
-#          window with Codex plus two project shells, matching wedding-meta.
-#          answers claude's first-run trust dialog, turns tcx-send into the
+#          window with selected agent plus two project shells.
+#          Answers Claude's first-run trust dialog, turns tcx-send into the
 #          tcx-compose REPL (type a prompt, Enter sends it to the remote
-#          claude), pins both panes to this pair (TCX_GROUP=<session>), attaches.
+#          agent), pins both panes to this pair (TCX_GROUP=<session>), attaches.
 #
 # WHY:     i3 splits an `exec` line on ';' and ',', so a multi-command
 #          `zsh -lc '…; …'` inside an i3minator `cmd:` never reaches wezterm —
@@ -30,6 +30,7 @@
 set -u
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$HERE/twin-agent-options.sh"
 CONF="${TCX_COCKPIT_PROFILES_FILE:-$HOME/.config/tcx-cockpit/profiles.conf}"
 P="${1:-}"
 
@@ -39,6 +40,10 @@ hold(){ echo; echo "[remote-pair ${P:-?}] $1 — shell kept open"; exec "${SHELL
 line="$(grep -v '^[[:space:]]*#' "$CONF" 2>/dev/null | grep -m1 "^${P}:")" \
     || hold "no profile '$P' in $CONF"
 IFS=':' read -r _ W S _ <<<"$line"
+twin_options_load "$P" || hold "invalid saved agent options for $P"
+twin_agent_argv "$TWIN_REMOTE_AGENT" "$TWIN_REMOTE_MODEL" "$TWIN_REMOTE_EFFORT"
+remote_agent_command="${TWIN_AGENT_ARGS[*]}"
+echo "[remote-pair $P] local $TWIN_LOCAL_AGENT $TWIN_LOCAL_MODEL/$TWIN_LOCAL_EFFORT; remote $TWIN_REMOTE_AGENT $TWIN_REMOTE_MODEL/$TWIN_REMOTE_EFFORT"
 
 # Same default as tcx-claude: the remote agent runs without per-tool permission
 # prompts, so it never blocks on a dialog nobody is watching on the worker
@@ -48,7 +53,10 @@ remote_instructions="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P
 [[ -s "$remote_instructions" ]] || remote_instructions="/home/b/p/all-my-tiny-projects/claude-rules/instructions/remote-twin-remote-worker.md"
 [[ -s "$remote_instructions" ]] || hold "remote instruction .md missing: $remote_instructions"
 export TCX_COCKPIT_REMOTE_INSTRUCTION_FILE="$remote_instructions"
-export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
+export TCX_COCKPIT_CLAUDE_CMD="${TCX_COCKPIT_CLAUDE_CMD:-$remote_agent_command}"
+export TCX_COCKPIT_REMOTE_AGENT_KIND="$TWIN_REMOTE_AGENT"
+[[ "$TWIN_REMOTE_AGENT" == claude ]] && export TCX_COCKPIT_SHORTCUT="${TCX_COCKPIT_SHORTCUT:-claude-main}"
+[[ "$TWIN_REMOTE_AGENT" == codex ]] && export TCX_COCKPIT_SHORTCUT="${TCX_COCKPIT_SHORTCUT:-codex-main}"
 # The LOCAL twin session is named like the launcher: remote-<profile>
 # (2026-10-03, Bernardo: every twin session must carry the remote- prefix).
 LS="remote-$P"
@@ -105,26 +113,31 @@ respawn(){  # $1 title  $2 command
 respawn tcx-stream "TCX_GROUP=$S bash $HERE/../setup/tcx-stream.sh"
 respawn tcx-send   "TCX_GROUP=$S $HERE/AUTO-tcx-compose.sh; exec ${SHELL:-zsh}"
 # Mirror the working remote-wedding-meta local session: cockpit, a manager
-# window with Codex and two shells, and the shell twin window.
+# window with the selected agent and two shells, and the shell twin window.
 manager_pane="$(pane_by_title remote-manager)"
 if [[ -z "$manager_pane" ]]; then
     manager_pane="$(pane_by_title codex-main)"
     if [[ -n "$manager_pane" ]]; then
         tmux select-pane -t "$manager_pane" -T remote-manager
-        tmux rename-window -t "$manager_pane" "codex-prep-$P"
+        tmux rename-window -t "$manager_pane" "manager-$P"
     fi
 fi
 if [[ -z "$manager_pane" ]]; then
-    manager_pane="$(tmux new-window -d -t "=$LS:" -n "codex-prep-$P" -c "$LD" -P -F '#{pane_id}' \
-        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P")" \
+    manager_pane="$(tmux new-window -d -t "=$LS:" -n "manager-$P" -c "$LD" -P -F '#{pane_id}' \
+        "$HERE/AUTO-run-local-manager-agent-in-project-directory.sh $P")" \
         || hold "could not create local manager window in $LS"
     tmux select-pane -t "$manager_pane" -T remote-manager
 elif (( ! tmuxinator_created )) && [[ "$(tmux display -p -t "$manager_pane" '#{pane_current_command}')" =~ ^(bash|zsh|sh)$ ]]; then
     tmux respawn-pane -k -t "$manager_pane" -c "$LD" \
-        "$HERE/AUTO-run-local-codex-agent-in-project-directory.sh $P" \
-        || hold "could not restart local manager Codex in $LS"
+        "$HERE/AUTO-run-local-manager-agent-in-project-directory.sh $P" \
+        || hold "could not restart local manager agent in $LS"
+fi
+local_agent_cmd="$(tmux display -p -t "$manager_pane" '#{pane_current_command}' 2>/dev/null)"
+if [[ "$local_agent_cmd" =~ ^(claude|codex)$ && "$local_agent_cmd" != "$TWIN_LOCAL_AGENT" ]]; then
+    hold "local manager runs $local_agent_cmd, saved choice is $TWIN_LOCAL_AGENT; end that agent before changing choices"
 fi
 manager_window="$(tmux display -p -t "$manager_pane" '#{window_id}')"
+tmux rename-window -t "$manager_window" "manager-$P"
 if (( $(tmux list-panes -t "$manager_window" -F '#{pane_id}' | wc -l) < 2 )); then
     tmux split-window -h -d -t "$manager_pane" -c "$LD" \
         || hold "could not add manager shell pane in $LS"
@@ -146,11 +159,18 @@ tmux set-option -p -t "$manager_pane" allow-set-title off 2>/dev/null || true
 TARGET="${XDG_CACHE_HOME:-$HOME/.cache}/tcpuxdo/target"
 IFS=$'\t' read -r TW TP < "$TARGET" || hold "cockpit wrote no target file"
 TCX_GROUP="$S" "$HERE/../tcx.sh" use "$TW" "$TP" >/dev/null || hold "tcx.sh use $TW $TP failed"
-"$HERE/AUTO-tcx-remote-trust.sh" "$TW" "$TP" || echo "[remote-pair $P] WARN: trust step did not reach 'ready' — check tcx-stream"
-remote_agent_cmd="$(timeout 15 "$HERE/../tcpuxdo" --op state 2>/dev/null \
-    | jq -r --arg w "$TW" --arg p "$TP" '.state[$w].panes[$p].cmd // "missing"' 2>/dev/null)"
-if [[ "$remote_agent_cmd" != claude ]]; then
-    echo "[remote-pair $P] FAIL: remote agent pane $TW:$TP reports '${remote_agent_cmd:-unavailable}', expected claude"
+if [[ "$TWIN_REMOTE_AGENT" == claude ]]; then
+    "$HERE/AUTO-tcx-remote-trust.sh" "$TW" "$TP" || echo "[remote-pair $P] WARN: trust step did not reach 'ready' — check tcx-stream"
+fi
+remote_agent_cmd="missing"
+for _ in 1 2 3 4 5; do
+    remote_agent_cmd="$(timeout 10 "$HERE/../tcpuxdo" --op state 2>/dev/null \
+        | jq -r --arg w "$TW" --arg p "$TP" '.state[$w].panes[$p].cmd // "missing"' 2>/dev/null)"
+    [[ "$remote_agent_cmd" == "$TWIN_REMOTE_AGENT" ]] && break
+    sleep 2
+done
+if [[ "$remote_agent_cmd" != "$TWIN_REMOTE_AGENT" ]]; then
+    echo "[remote-pair $P] FAIL: remote agent pane $TW:$TP reports '${remote_agent_cmd:-unavailable}', expected $TWIN_REMOTE_AGENT"
 fi
 "$HERE/AUTO-create-or-reuse-remote-git-shell-pane-for-twin.sh" "$P" \
     || echo "[remote-pair $P] WARN: remote git shell pane not ready; rerun launcher after worker reconnects"

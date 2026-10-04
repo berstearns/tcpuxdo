@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #===============================================================================
 # WHAT:    AUTO-tcx-cockpit.sh — one command (and therefore one i3 shortcut)
-#          that gives you a REMOTE Claude Code pane plus a LOCAL two-pane
+#          that gives you a REMOTE agent pane plus a LOCAL two-pane
 #          cockpit for driving it:
 #
-#            remote worker :   tmux session <name>, one pane running `claude`
+#            remote worker :   tmux session <name>, one pane running an agent
 #            local m1      :   tmux session <name>-cockpit
 #                                pane "tcx-send"   — you type here
 #                                pane "tcx-stream" — live view of the remote pane
@@ -20,7 +20,7 @@
 #
 # INPUTS:  -w, --worker NAME    target worker (else: rofi over LIVE state)
 #          -s, --session NAME   remote session name; local becomes <name>-cockpit
-#          -d, --dir PATH       remote working directory for claude
+#          -d, --dir PATH       remote working directory for the agent
 #          -p, --profile NAME   named preset from the profiles file
 #          -n, --dry-run        print every tcpuxdo/tmux argv, run NOTHING
 #              --no-remote      build only the local cockpit
@@ -37,7 +37,8 @@
 #
 #          Env overrides (every CONFIG key): TCX_COCKPIT_WORKER,
 #          TCX_COCKPIT_SESSION, TCX_COCKPIT_DIR, TCX_COCKPIT_PROFILE,
-#          TCX_COCKPIT_PROFILES_FILE, TCX_COCKPIT_CLAUDE_CMD,
+#          TCX_COCKPIT_PROFILES_FILE, TCX_COCKPIT_CLAUDE_CMD (legacy name for
+#          the remote agent command), TCX_COCKPIT_REMOTE_AGENT_KIND,
 #          TCX_COCKPIT_SHORTCUT, TCX_COCKPIT_DEAD_SECS, TCX_COCKPIT_WAIT,
 #          TCX_COCKPIT_ROFI_LINES.
 #
@@ -269,13 +270,13 @@ show_help() {
     cat <<EOF
 Usage: AUTO-tcx-cockpit.sh [OPTIONS]
 
-One command → a remote Claude Code pane on a tcpuxdo worker, plus a local
+One command → a remote agent pane on a tcpuxdo worker, plus a local
 two-pane tmux cockpit (send + live stream) aimed at it.
 
 Options:
   -w, --worker NAME     target worker (skip the rofi prompt)
   -s, --session NAME    remote session name; local is <NAME>-cockpit
-  -d, --dir PATH        remote working directory for claude
+  -d, --dir PATH        remote working directory for the agent
   -p, --profile NAME    named preset from ${CONFIG[profiles_file]}
   -n, --dry-run         print every tmux/tcpuxdo command, run nothing
       --no-remote       only build the local cockpit
@@ -636,11 +637,15 @@ remote_half() {
         --worker "$w" --pane "$pane" --force >/dev/null \
         || note "shortcut '${CONFIG[shortcut]}' could not be set (continuing; addressing by pane id still works)"
 
-    # Launch claude — but only if that pane is not already running it. Sending
-    # `cd … && claude` into a live claude pane types the text INTO Claude.
+    # Launch the selected agent only when the pane is not already running an
+    # agent. Sending a shell command into a live agent would submit it as text.
     local cur; cur="$(pane_cmd "$w" "$pane")"
-    if [[ "$cur" == "claude" ]]; then
-        note "pane $pane already runs claude — not sending a second launch"
+    local wanted_agent="${TCX_COCKPIT_REMOTE_AGENT_KIND:-claude}"
+    [[ "$wanted_agent" == claude || "$wanted_agent" == codex ]] || die E_BAD_AGENT "remote agent kind must be claude or codex" 64
+    if [[ "$cur" == "$wanted_agent" ]]; then
+        note "pane $pane already runs $wanted_agent — not sending a second launch (saved model/effort apply on a fresh agent process)"
+    elif [[ "$cur" == claude || "$cur" == codex ]]; then
+        die E_AGENT_MISMATCH "pane $pane already runs $cur; selected remote agent is $wanted_agent. End the existing agent before changing the choice" 3
     else
         # PATH-SAFE LAUNCH: a fresh tmux pane's shell often has NOT sourced the
         # rc that put ~/.local/bin (claude, the credpipe wrapper) on PATH — a
@@ -667,9 +672,9 @@ remote_half() {
             instruction_setup="printf %s $payload | base64 -d > $instruction_target && "
             instruction_prompt=" \"Read $instruction_target and follow it. Report if you cannot read it.\""
         fi
-        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; mkdir -p ${CONFIG[dir]} && cd ${CONFIG[dir]} && ${instruction_setup}exec ${CONFIG[claude_cmd]}${instruction_prompt}'"
+        local launch="bash -lc 'export PATH=\"\$HOME/.local/bin:\$PATH\"; command -v $wanted_agent >/dev/null || { echo missing-remote-agent-$wanted_agent; exit 127; }; mkdir -p ${CONFIG[dir]} && cd ${CONFIG[dir]} && ${instruction_setup}exec ${CONFIG[claude_cmd]}${instruction_prompt}'"
         if [[ -n "$instruction_file" ]]; then
-            step "remote: copy $(basename "$instruction_file") and launch Claude -> $w $pane"
+            step "remote: copy $(basename "$instruction_file") and launch $wanted_agent -> $w $pane"
         else
             step "remote: send-keys \"$launch\" -> $w $pane"
         fi

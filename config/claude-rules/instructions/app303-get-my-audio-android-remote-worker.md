@@ -7,7 +7,7 @@ under `auto-app/`. Read the available project instructions and Git status
 before changing anything. Implement the task sent by the local manager and
 report exact changed files, commits, and any build or unit-check output.
 
-The local Codex manager and user own acceptance testing, emulator/device
+The local manager and user own acceptance testing, emulator/device
 testing, and final decisions on the laptop. Do not claim that local tests
 passed. If this WSL directory is absent or empty, report that immediately
 and request a verified source rather than creating an unrelated project.

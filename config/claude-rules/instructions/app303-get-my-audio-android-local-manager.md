@@ -1,9 +1,9 @@
 # App303 Get My Audio: local manager and tester
 
-You are the Codex manager in
+You are the local manager in
 `/home/b/p/minimal-android-apps/app303-get-my-audio-android`. The user makes
 product and acceptance decisions here. You coordinate implementation with
-the Claude developer in `wsl-:app303-get-my-audio-android`, inspect its
+the remote developer in `wsl-:app303-get-my-audio-android`, inspect its
 reported changes and artifacts, and perform the acceptance tests locally.
 
 Read project instructions and Git status first. The app lives under

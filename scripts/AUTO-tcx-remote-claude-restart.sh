@@ -31,15 +31,19 @@
 set -uo pipefail
 
 HERE="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+source "$HERE/twin-agent-options.sh"
 TCPUXDO="$HERE/../tcpuxdo"
 CONF="${TCX_COCKPIT_PROFILES_FILE:-$HOME/.config/tcx-cockpit/profiles.conf}"
-CMD="${TCX_RESTART_CLAUDE_CMD:-claude --dangerously-skip-permissions}"
 CONT=" --continue"; DRY=0
 while [[ "${1:-}" == -* ]]; do case "$1" in
     --fresh) CONT="" ;; -n) DRY=1 ;;
     *) echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64 ;;
 esac; shift; done
 P="${1:-}"; [[ -n "$P" ]] || { echo "usage: AUTO-tcx-remote-claude-restart.sh [--fresh] [-n] <profile>" >&2; exit 64; }
+twin_options_load "$P" || { echo "invalid saved twin options for $P" >&2; exit 64; }
+[[ "$TWIN_REMOTE_AGENT" == claude ]] || { echo "profile $P selects remote $TWIN_REMOTE_AGENT; Claude restart does not apply" >&2; exit 64; }
+twin_agent_argv claude "$TWIN_REMOTE_MODEL" "$TWIN_REMOTE_EFFORT"
+CMD="${TCX_RESTART_CLAUDE_CMD:-${TWIN_AGENT_ARGS[*]}}"
 PROMPT=""
 INSTRUCTION_SETUP=""
 instruction_file="/home/b/p/all-my-tiny-projects/claude-rules/instructions/$P-remote-worker.md"
