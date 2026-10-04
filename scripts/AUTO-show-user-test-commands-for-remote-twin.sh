@@ -14,7 +14,7 @@ case "$profile" in
     printf '%s\n' 'Android user path: (1) download a published APK when available, then install and launch on the selected USB device or emulator; (2) optionally build from this checkout; (3) run UI automation from the ui window.' 'List devices first: adb devices -l' "Download or install: $here/AUTO-download-install-and-launch-user-apk.sh $profile APK_URL_OR_FILE DEVICE_SERIAL" 'Choose the exact serial; do not assume the first device.'
     case "$profile" in
       app303-get-my-audio-android)
-        printf '%s\n' 'Build: cd auto-app && ./scripts/AUTO-android-build.sh debug' 'Install/launch: cd auto-app && ./scripts/AUTO-android-install-launch.sh SERIAL [APK_PATH]' 'UI automation: cd auto-app && ./scripts/AUTO-maestro-run.sh (read its header for device arguments)' ;;
+        printf '%s\n' 'Build: ./scripts/AUTO-android-build.sh debug' 'Install/launch: ./scripts/AUTO-android-install-launch.sh SERIAL [APK_PATH]' 'UI automation: ./scripts/AUTO-maestro-run.sh (read its header for device arguments)' ;;
       app11)
         printf '%s\n' 'Build/installation: inspect the app11 Android project README and scripts before running.' 'UI automation: cd androidApp/maestro && ./run-all.sh (targets its documented AVD).' ;;
       app7)

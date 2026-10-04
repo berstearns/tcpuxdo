@@ -9,6 +9,6 @@ adb devices -l
 /home/b/p/tcpuxdo/scripts/AUTO-download-install-and-launch-user-apk.sh app303-get-my-audio-android APK_URL_OR_FILE DEVICE_SERIAL
 ```
 
-The install helper prints the APK hash and uses the selected device serial. It needs `aapt` or `apkanalyzer` to discover the installed package for launching it. App303's optional source build is `auto-app/scripts/AUTO-android-build.sh debug`; its UI runner is `auto-app/scripts/AUTO-maestro-run.sh`. App7 and app11 show their existing Maestro `run-all.sh` in the `ui` pane. App9 needs a verified automation runner before automated UI results can be claimed.
+The install helper prints the APK hash and uses the selected device serial. It needs `aapt` or `apkanalyzer` to discover the installed package for launching it. App303's user checkout is its nested `auto-app` repository, where the optional build is `scripts/AUTO-android-build.sh debug` and the UI runner is `scripts/AUTO-maestro-run.sh`. App7 and app11 show their existing Maestro `run-all.sh` in the `ui` pane. App9 needs a verified automation runner before automated UI results can be claimed.
 
 Re-run `scripts/AUTO-tcx-remote-pair-gen.sh` after adding profiles or changing generator logic. Reopening the i3minator launcher adds a missing user/UI window to an existing tmux session. Existing wedding and Duolingo user windows are preserved.

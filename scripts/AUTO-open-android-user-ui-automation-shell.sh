@@ -14,7 +14,7 @@ case "$profile" in
         ;;
     app303-get-my-audio-android)
         checkout="$("$here/AUTO-open-fresh-user-checkout-for-remote-twin.sh" "$profile" --path)"
-        dir="$checkout/auto-app"
+        dir="$checkout"
         runner='./scripts/AUTO-maestro-run.sh'
         ;;
     app9)

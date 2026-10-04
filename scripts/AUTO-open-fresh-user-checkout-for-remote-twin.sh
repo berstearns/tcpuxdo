@@ -11,6 +11,10 @@ mode="${2:---path}"
 dirs="${TCX_LOCAL_DIRS:-$HOME/.config/tcx-cockpit/local-dirs.tsv}"
 project="$(awk -F '\t' -v p="$profile" '$1==p {print $2; exit}' "$dirs")"
 [[ -d "$project" ]] || { echo "user checkout: no local source for $profile: $project" >&2; exit 1; }
+# app303's active application is its nested auto-app repository. The parent
+# project path belongs to a different Git root with obsolete app303 files.
+[[ "$profile" == app303-get-my-audio-android ]] && project="$project/auto-app"
+[[ -d "$project" ]] || { echo "user checkout: source missing: $project" >&2; exit 1; }
 source_root="$(git -C "$project" rev-parse --show-toplevel)"
 project="$(realpath "$project")"
 relative="${project#"$source_root"/}"
