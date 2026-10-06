@@ -2,9 +2,8 @@
 #===============================================================================
 # watchdog.sh — lightweight tcpuxdo node liveness monitor.
 #
-# Checks every CHECK_INTERVAL seconds whether worker.py is running inside the
-# tcpuxdo-worker tmux session. If the session is gone or worker.py is not the
-# active process, runs node-up.sh to respawn it.
+# Checks every CHECK_INTERVAL seconds whether the uniquely titled worker pane
+# is alive. It remains in a separate pane and never restarts itself.
 #
 # Run this in a DEDICATED tmux session so it survives OOM or Claude Code crashes:
 #   tmux new-session -d -s tcpuxdo-watchdog -c ~/tcpuxdo 'bash setup/watchdog.sh'
@@ -18,6 +17,8 @@ ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$ROOT"
 
 SESSION="${WORKER_SESSION:-tcpuxdo-worker}"
+WINDOW="${WORKER_WINDOW:-worker}"
+PANE_TITLE="${WORKER_PANE_MAIN:-tcpuxdo-worker-main}"
 CHECK_INTERVAL="${WATCHDOG_INTERVAL:-15}"
 LOG="${WATCHDOG_LOG:-$HOME/tcpuxdo-watchdog.log}"
 
@@ -26,13 +27,11 @@ log() { echo "[watchdog $(date -u +%FT%TZ)] $*" | tee -a "$LOG"; }
 log "start — monitoring $SESSION every ${CHECK_INTERVAL}s (log: $LOG)"
 
 while true; do
-    if ! tmux has-session -t "$SESSION" 2>/dev/null; then
-        log "ALERT: session $SESSION missing — running node-up.sh"
-        bash "$ROOT/setup/node-up.sh" >> "$LOG" 2>&1 \
-            && log "node-up.sh OK" \
-            || log "node-up.sh FAILED (exit $?)"
-    elif ! pgrep -f "worker\.py" > /dev/null 2>&1; then
-        log "ALERT: worker.py not running — running worker-restart.sh"
+    mapfile -t panes < <(tmux list-panes -t "$SESSION:$WINDOW" -F '#{pane_id} #{pane_title} #{pane_current_command}' 2>/dev/null | awk -v t="$PANE_TITLE" '$2==t {print $1}')
+    if (( ${#panes[@]} != 1 )); then
+        log "ERROR: expected exactly one pane titled $PANE_TITLE; found ${#panes[@]}"
+    elif ! tmux display-message -p -t "${panes[0]}" '#{pane_current_command}' | grep -Eq 'python(3)?'; then
+        log "ALERT: worker pane is not running python — running worker-restart.sh"
         bash "$ROOT/setup/worker-restart.sh" >> "$LOG" 2>&1 \
             && log "worker-restart.sh OK" \
             || log "worker-restart.sh FAILED (exit $?)"

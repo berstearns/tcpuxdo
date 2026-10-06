@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
 #===============================================================================
-# redeploy-loop.sh — no-systemd auto-redeploy. Run redeploy-watch.sh forever in
-# a tmux pane, every REDEPLOY_INTERVAL seconds. One pane per machine (relay,
-# each tty node, main laptop). Ctrl-C to stop.
+# redeploy-loop.sh — deprecated manual loop wrapper. It is NOT installed or
+# started by node-up.sh/watchdog.sh. Pinned REDEPLOY_SHA is required each run;
+# without it each cycle reports a configuration error and performs no update.
 #
-# redeploy-watch.sh is a quiet no-op when origin == HEAD; it only speaks (and
-# git-pull + respawn the server/worker) when a new commit lands. So this pane
-# stays silent except for a heartbeat line, and prints a block when it ships.
-#
-#   bash setup/redeploy-loop.sh                 # default 300s
-#   REDEPLOY_INTERVAL=60 bash setup/redeploy-loop.sh
+# Do not run unattended: REDEPLOY_SHA must be supplied for every invocation,
+# and this loop does not obtain a new desired SHA from master.
 #===============================================================================
 set -uo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
@@ -17,10 +13,10 @@ cd "$ROOT"
 INT="${REDEPLOY_INTERVAL:-300}"
 cli="$(basename "$ROOT")"
 
-echo "redeploy-loop: watching $cli ($ROOT) every ${INT}s — Ctrl-C to stop"
+echo "redeploy-loop: legacy wrapper for $cli ($ROOT) every ${INT}s — no desired SHA is selected here"
 while :; do
   out="$(bash setup/redeploy-watch.sh 2>&1)" || true
   [ -n "$out" ] && printf '\n%s\n' "$out"
-  printf '\r[%(%Y-%m-%d %H:%M:%S)T] %s up to date — next check %ss   ' -1 "$cli" "$INT"
+  printf '\r[%(%Y-%m-%d %H:%M:%S)T] %s checked — next check %ss   ' -1 "$cli" "$INT"
   sleep "$INT"
 done

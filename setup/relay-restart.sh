@@ -13,13 +13,14 @@ ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 SESSION="${QUEUE_SESSION:-tcpuxdo-queue}"
 SERVER_TITLE="${QUEUE_PANE_SERVER:-tcpuxdo-queue-server}"
 
-pane=$(tmux list-panes -t "$SESSION" -a -F '#{window_index}.#{pane_index} #{pane_title}' 2>/dev/null \
-        | awk -v t="$SERVER_TITLE" 'index($0,t){print $1; exit}')
-[ -n "$pane" ] || { echo "server pane '$SERVER_TITLE' not found in session '$SESSION'"; exit 1; }
+mapfile -t panes < <(tmux list-panes -t "$SESSION" -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
+        | awk -v t="$SERVER_TITLE" '$2==t{print $1}')
+[[ ${#panes[@]} -eq 1 ]] || { echo "expected exactly one server pane '$SERVER_TITLE' in '$SESSION', found ${#panes[@]}"; exit 1; }
+pane="${panes[0]}"
 
 echo "respawning $SESSION:$pane ($SERVER_TITLE) from $ROOT …"
-tmux respawn-pane -k -t "$SESSION:$pane" \
-  "cd $ROOT && set -a && . ./.env && set +a && exec python3 server.py"
+tmux respawn-pane -k -t "$pane" \
+  "cd '$ROOT' && set -a && . ./.env && set +a && exec python3 server.py"
 sleep 2
 echo "── server pane after respawn ──────────────────────────────"
 tmux capture-pane -p -t "$SESSION:$pane" | tail -10

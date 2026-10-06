@@ -21,13 +21,14 @@ HOST="${TCPUX_HOST:?set TCPUX_HOST in .env}"
 PORT="${TCPUX_PORT:?set TCPUX_PORT in .env}"
 PY="${PYTHON:-python3}"
 
-pane=$(tmux list-panes -t "$SESSION" -a -F '#{window_index}.#{pane_index} #{pane_title}' 2>/dev/null \
-        | awk -v t="$WORKER_TITLE" 'index($0,t){print $1; exit}')
-[ -n "$pane" ] || { echo "worker pane '$WORKER_TITLE' not found in session '$SESSION'"; exit 1; }
+mapfile -t panes < <(tmux list-panes -t "$SESSION" -a -F '#{pane_id} #{pane_title}' 2>/dev/null \
+        | awk -v t="$WORKER_TITLE" '$2==t{print $1}')
+[[ ${#panes[@]} -eq 1 ]] || { echo "expected exactly one worker pane '$WORKER_TITLE' in '$SESSION', found ${#panes[@]}"; exit 1; }
+pane="${panes[0]}"
 
 echo "respawning $SESSION:$pane ($WORKER_TITLE) → relay $HOST:$PORT as '$NAME' from $ROOT …"
-tmux respawn-pane -k -t "$SESSION:$pane" \
-  "cd $ROOT && set -a && . ./.env && set +a && exec $PY worker.py --name $NAME --host $HOST --port $PORT"
+tmux respawn-pane -k -t "$pane" \
+  "cd '$ROOT' && set -a && . ./.env && set +a && exec '$PY' worker.py --name '$NAME' --host '$HOST' --port '$PORT'"
 sleep 2
 echo "── worker pane after respawn ──────────────────────────────"
 tmux capture-pane -p -t "$SESSION:$pane" | tail -10
