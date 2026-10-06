@@ -24,7 +24,7 @@ usage() { sed -n '1,24p' "$0"; }
 fail_usage() { usage >&2; exit 64; }
 remote_path() {
   case "$1" in
-    '~/'*) printf "~/'%s'" "${1#~/}" ;;
+    '~/'*) printf "~/'%s'" "${1#\~/}" ;;
     /*) printf '%q' "$1" ;;
   esac
 }
@@ -55,15 +55,17 @@ case "$MODE" in
     echo "target=$TARGET new_worker=$NEW_WORKER session=$SESSION branch=$BRANCH sha=$SHA"
     "$TCPUXDO_BIN" --op create-session --worker "$TARGET" --session "$SESSION"
     deadline=$(( $(date +%s) + WAIT ))
+    BOOT_PANE=""
     while (( $(date +%s) < deadline )); do
       STATE="$($TCPUXDO_BIN --op state)"
-      if jq -e --arg w "$TARGET" --arg p "$SESSION:0:0" '.state[$w].panes[$p] != null' >/dev/null <<<"$STATE"; then break; fi
+      BOOT_PANE="$(jq -r --arg w "$TARGET" --arg s "$SESSION" '[.state[$w].panes // {} | keys[] | select(startswith($s+":"))] | first // ""' <<<"$STATE")"
+      [[ -n "$BOOT_PANE" ]] && break
       sleep 2
     done
-    jq -e --arg w "$TARGET" --arg p "$SESSION:0:0" '.state[$w].panes[$p] != null' >/dev/null <<<"$STATE" || { echo 'new tmux bootstrap pane did not register before deadline' >&2; exit 1; }
+    [[ -n "$BOOT_PANE" ]] || { echo 'new tmux bootstrap pane did not register before deadline' >&2; exit 1; }
     qsrc="$(remote_path "$SOURCE_ROOT")"; qnew="$(remote_path "$NEW_ROOT")"
     CMD="tmux select-pane -t \"\$TMUX_PANE\" -T 'tcpuxdo-recovery-bootstrap-${TARGET}' && git clone --branch '$BRANCH' --single-branch 'https://github.com/berstearns/tcpuxdo.git' $qnew && cd $qnew && git pull --ff-only origin '$BRANCH' && test \"\$(git rev-parse HEAD)\" = '$SHA' && grep -E '^(TCPUX_HOST|TCPUX_PORT|PYTHON|TCPUX_POLL|TCPUX_SYNC|TCPUX_IDLE_CMDS)=' $qsrc/.env > .env && printf '%s\\n' 'TCPUX_WORKER=$NEW_WORKER' 'WORKER_SESSION=$SESSION' 'WORKER_WINDOW=worker' 'WORKER_PANE_MAIN=tcpuxdo-recovery-main-${TARGET}' 'WORKER_PANE_OBS=tcpuxdo-recovery-observer-${TARGET}' 'WORKER_PANE_CTL=tcpuxdo-recovery-control-${TARGET}' 'WORKER_PANE_WATCH=tcpuxdo-recovery-watch-${TARGET}' >> .env && bash setup/node-up.sh"
-    "$TCPUXDO_BIN" -w "$TARGET" -p "$SESSION:0:0" -c "$CMD"
+    "$TCPUXDO_BIN" -w "$TARGET" -p "$BOOT_PANE" -c "$CMD"
     echo 'dispatch=queued; waiting for a fresh relay heartbeat from the isolated worker'
     deadline=$(( $(date +%s) + WAIT ))
     while (( $(date +%s) < deadline )); do
